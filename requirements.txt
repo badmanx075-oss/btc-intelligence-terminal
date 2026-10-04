@@ -1,6 +1,6 @@
-echo fastapi> requirements.txt
-echo uvicorn>> requirements.txt
-echo websockets>> requirements.txt
-echo aiohttp>> requirements.txt
-echo numpy>> requirements.txt
-echo python-telegram-bot>> requirements.txtstreamlit
+streamlit
+fastapi
+uvicorn
+websockets
+aiohttp
+requests
