@@ -410,14 +410,20 @@ async def preload_history():
     async with aiohttp.ClientSession() as session:
         url_15m = "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=15&limit=40"
         async with session.get(url_15m) as resp:
+            try:
             data = await resp.json()
+        except Exception:
+            data = {}
             raw = data.get("result", {}).get("list", [])
             raw.reverse()
             for k in raw:
                 candles_15m.append({"open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]), "vol": float(k[5])})
         url_1m = "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=60"
         async with session.get(url_1m) as resp:
+            try:
             data = await resp.json()
+        except Exception:
+            data = {}
             raw = data.get("result", {}).get("list", [])
             raw.reverse()
             for k in raw:
