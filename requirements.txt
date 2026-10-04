@@ -4,3 +4,4 @@ uvicorn
 websockets
 aiohttp
 requests
+python-telegram-bot
