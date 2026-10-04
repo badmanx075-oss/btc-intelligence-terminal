@@ -3,4 +3,4 @@ echo uvicorn>> requirements.txt
 echo websockets>> requirements.txt
 echo aiohttp>> requirements.txt
 echo numpy>> requirements.txt
-echo python-telegram-bot>> requirements.txt
+echo python-telegram-bot>> requirements.txtstreamlit
