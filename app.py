@@ -60,7 +60,7 @@ def send_telegram(msg):
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if token and chat_id:
         try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            url = "https://api.telegram.org/bot" + token + "/sendMessage"
             requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=3)
         except Exception:
             pass
@@ -98,11 +98,11 @@ price = get_btc_price()
 # Price Header & Trigger Controls
 col_p, col_b1, col_b2 = st.columns([3, 1, 1])
 with col_p:
-    st.markdown(f"### BTC/USDT LIVE: <span style='color:#ffb300;'>${price:,.2f}</span>", unsafe_allow_html=True)
+    st.markdown("### BTC/USDT LIVE: <span style='color:#ffb300;'>$" + "{:,.2f}".format(price) + "</span>", unsafe_allow_html=True)
 
 with col_b1:
     if st.button("⚡ Force Signal Trigger", use_container_width=True):
-        tid = f"MANUAL-{int(datetime.now().timestamp()) % 1000000}"
+        tid = "MANUAL-" + str(int(datetime.now().timestamp()) % 1000000)
         st.session_state.active_trade = {
             "id": tid,
             "time": datetime.now().strftime("%H:%M:%S"),
@@ -115,7 +115,8 @@ with col_b1:
             "pnl": 0.0
         }
         save_trade(st.session_state.active_trade)
-        send_telegram(f"🚨 *STAGE 2/3 EXECUTION TICKET*\n\nID: `{tid}`\nDirection: *LONG*\nEntry: *${price:,.1f}*\nSL: *${price - 180.0:,.1f}*\nT1: *${price + 350.0:,.1f}*")
+        msg_text = "🚨 *STAGE 2/3 EXECUTION TICKET*\n\nID: `" + tid + "`\nDirection: *LONG*\nEntry: *$" + str(round(price, 1)) + "*\nSL: *$" + str(round(price - 180.0, 1)) + "*\nT1: *$" + str(round(price + 350.0, 1)) + "*"
+        send_telegram(msg_text)
         st.rerun()
 
 with col_b2:
@@ -123,11 +124,12 @@ with col_b2:
         st.session_state.active_trade = None
         st.rerun()
 
-# Runner Status Box
+# Runner Status Box (Safe from syntax errors)
 if st.session_state.active_trade:
     tr = st.session_state.active_trade
     pnl = round(price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - price, 1)
-    st.success(f"ACTIVE RUNNER: {tr['direction']} [{tr['id']}] | Entry: ${tr['entry']} | SL: ${tr['sl']} \vert{} T1:${tr['t1']} | PnL: {pnl} pts | Status: {tr['status']}")
+    status_msg = "ACTIVE RUNNER: " + str(tr["direction"]) + " [" + str(tr["id"]) + "] | Entry: $" + str(tr["entry"]) + " | SL: $" + str(tr["sl"]) + " \vert{} T1: $" + str(tr["t1"]) + " | PnL: " + str(pnl) + " pts | Status: " + str(tr["status"])
+    st.success(status_msg)
 else:
     st.caption("NO ACTIVE TRADE IN RUNNER")
 
