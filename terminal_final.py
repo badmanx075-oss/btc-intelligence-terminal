@@ -97,31 +97,10 @@ current_price = 84500.0
 active_trade = None
 connected_websockets = set()
 
-# Preload History (Crash-Proof for Cloud)
+# Preload History (Safe & Clean)
 async def preload_history():
     global candles_history
-    try:
-        url = "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=60"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    try:
-                        data = await resp.json()
-                        list_data = data.get("result", {}).get("list", [])
-                        candles_history = []
-                        for item in reversed(list_data):
-                            candles_history.append({
-                                "t": int(item[0]),
-                                "o": float(item[1]),
-                                "h": float(item[2]),
-                                "l": float(item[3]),
-                                "c": float(item[4]),
-                                "v": float(item[5])
-                            })
-                    except Exception:
-                        candles_history = []
-    except Exception:
-        candles_history = []
+    candles_history = []
 
 async def bybit_ws_feed():
     global current_price, active_trade
@@ -249,6 +228,70 @@ async def get_index():
     </head>
     <body>
         <div class="grid">
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">STRUCTURE SCORE</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">VOLUME / DELTA</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">MOMENTUM SQUEEZE</div><div class="stat-val" style="color:#ffb300;">45/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">LIQUIDITY PROXIMITY</div><div class="stat-val" style="color:#ab47bc;">40/100</div></div>
+        </div>
+
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <div><strong style="color:#fff;">BTC/USDT LIVE STREAM:</strong> <span id="btcPrice" style="color:#ffb300; font-size:18px;">Connecting...</span></div>
+                <div>
+                    <button class="btn" onclick="triggerOverride()">⚡ Force Signal Trigger</button>
+                    <button class="btn btn-reset" onclick="resetTrade()">Reset Trade</button>
+                </div>
+            </div>
+            <div id="tradeBanner" style="background:#181d28; border:1px solid #2a2e39; padding:12px; border-radius:4px;">
+                NO ACTIVE TRADE IN RUNNER
+            </div>
+        </div>
+
+        <div class="card">
+            <strong style="color:#fff;">PERSISTENT SIGNALS VAULT (DATABASE AUDIT)</strong>
+            <table>
+                <thead>
+                    <tr><th>Time</th><th>Trade ID</th><th>Direction</th><th>Entry</th><th>Invalidation</th><th>Target 1</th><th>Target 2</th><th>Outcome Status</th></tr>
+                </thead>
+                <tbody id="vaultBody">
+                    {table_html}
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            const host = window.location.host;
+            const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+            const ws = new WebSocket(`${{wsProtocol}}//${{host}}/ws`);
+
+            ws.onmessage = function(event) {{
+                const data = JSON.parse(event.data);
+                document.getElementById("btcPrice").innerText = "$" + data.price.toLocaleString("en-US", {{minimumFractionDigits: 1}});
+                const banner = document.getElementById("tradeBanner");
+                if (data.active_trade) {{
+                    const t = data.active_trade;
+                    banner.innerHTML = `<span style="background:#00e676;color:#000;padding:2px 6px;border-radius:3px;font-weight:bold;">${{t.direction}}</span> <strong>${{t.id}}</strong> | Entry: $${{t.entry}} | SL: $${{t.sl}} | T1: $${{t.t1}} | PnL: <strong>${{t.pnl}} pts</strong> | Status: <span style="color:#ffb300;">${{t.status}}</span>`;
+                }} else {{
+                    banner.innerHTML = "NO ACTIVE TRADE IN RUNNER";
+                }}
+            }};
+
+            function triggerOverride() {{
+                fetch("/trigger_override", {{method: "POST"}});
+            }}
+
+            function resetTrade() {{
+                fetch("/reset_trade", {{method: "POST"}});
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
+if __name__ == "__main__":
+    uvicorn.run("terminal_final.py:app", host="127.0.0.1", port=8000, reload=False)
+     <div class="grid">
             <div class="stat-box"><div style="font-size:11px;color:#787b86;">STRUCTURE SCORE</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
             <div class="stat-box"><div style="font-size:11px;color:#787b86;">VOLUME / DELTA</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
             <div class="stat-box"><div style="font-size:11px;color:#787b86;">MOMENTUM SQUEEZE</div><div class="stat-val" style="color:#ffb300;">45/100</div></div>
