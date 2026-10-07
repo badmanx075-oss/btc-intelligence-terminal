@@ -6,6 +6,7 @@ import os
 import requests
 import pandas as pd
 import random
+import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Intelligence Terminal", initial_sidebar_state="expanded")
 
@@ -13,7 +14,7 @@ st.set_page_config(layout="wide", page_title="BTC Intelligence Terminal", initia
 st.markdown("""
 <style>
     .stApp { background-color: #080a0f; color: #d1d4dc; font-family: monospace; }
-    .card-box { background: #11141d; border: 1px solid #1f2430; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+    .card-box { background: #11141d; border: 1px solid #1f2430; border-radius: 8px; padding: 14px; text-align: center; }
     .metric-title { font-size: 11px; color: #88909e; font-weight: 600; letter-spacing: 0.5px; }
     .metric-value { font-size: 22px; font-weight: bold; margin-top: 4px; }
     #MainMenu, footer, header { visibility: hidden; }
@@ -126,8 +127,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🤖 Auto-Trader Engine")
-    auto_trade_toggle = st.toggle("Enable Automated Execution", value=True)
-    min_confidence = st.slider("Min Setup Confidence", 70, 95, 80)
+    st.toggle("Enable Automated Execution", value=True)
+    st.slider("Min Setup Confidence", 70, 95, 80)
 
 # ----------------- FALLBACK PRICE FETCH -----------------
 def fetch_current_price():
@@ -143,7 +144,7 @@ def fetch_current_price():
 
 current_btc = fetch_current_price()
 
-# Session State for Running Trade
+# Session State
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = None
 
@@ -157,31 +158,15 @@ def generate_conversational_signal(direction, entry_price):
         t1 = round(entry_price + 350.0, 1)
         t2 = round(entry_price + 700.0, 1)
         rating = random.choice(["⭐⭐⭐⭐ (8.8/10)", "⭐⭐⭐⭐⭐ (9.2/10)", "⭐⭐⭐⭐ (8.5/10)"])
-        reasons = [
-            "Downside liquidity sweep complete hua aur order book me aggressive spot absorption visible hua.",
-            "1-minute orderflow me delta flip confirm ho gaya aur key pivot support se sharp re-acceptance mila.",
-            "Funding rate dip ke saath open interest bounce hua, shorts squeeze trap trigger hone ki high probability hai."
-        ]
-        chosen_reason = random.choice(reasons)
-        remarks = (
-            "Bhai, price ne niche se fakeout karke saare tight stops uda diye hain. "
-            "Delta green turn ho chuka hai aur buyers control me lag rahe hain, isliye $180 ke tight SL ke sath quick bounce capture karne trade trigger ki gayi hai."
-        )
+        chosen_reason = "Downside liquidity sweep complete hua aur order book me aggressive spot absorption visible hua."
+        remarks = "Bhai, price ne niche se fakeout karke saare tight stops uda diye hain. Delta green turn ho chuka hai aur buyers control me lag rahe hain, isliye $180 ke tight SL ke sath quick bounce capture karne trade trigger ki gayi hai."
     else:
         sl = round(entry_price + 180.0, 1)
         t1 = round(entry_price - 350.0, 1)
         t2 = round(entry_price - 700.0, 1)
         rating = random.choice(["⭐⭐⭐⭐ (8.6/10)", "⭐⭐⭐⭐⭐ (9.1/10)", "⭐⭐⭐⭐ (8.4/10)"])
-        reasons = [
-            "Local resistance par upside liquidity hunt hone ke turant baad aggressive CVD divergence bani.",
-            "Higher timeframe POC rejection ke baad low-volume pull back fail hua, sell absorption active hai.",
-            "Longs exhaustion dikh rahi hai, premium order flow cluster dump hone ke clear signs hain."
-        ]
-        chosen_reason = random.choice(reasons)
-        remarks = (
-            "Upar liquidity grab ho chuki hai par buyers breakout maintain nahi kar paaye. "
-            "Bid wall deplete ho rahi hai aur heavy sell blocks aa rahe hain, isliye rejection play karne $180 SL ke sath short initiate kiya hai."
-        )
+        chosen_reason = "Local resistance par upside liquidity hunt hone ke turant baad aggressive CVD divergence bani."
+        remarks = "Upar liquidity grab ho chuki hai par buyers breakout maintain nahi kar paaye. Bid wall deplete ho rahi hai aur heavy sell blocks aa rahe hain, isliye rejection play karne $180 SL ke sath short initiate kiya hai."
 
     return {
         "timestamp": now_str,
@@ -198,7 +183,7 @@ def generate_conversational_signal(direction, entry_price):
         "pnl": 0.0
     }
 
-# ----------------- LIVE METRICS -----------------
+# ----------------- TOP METRICS -----------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
     st.markdown('<div class="card-box"><div class="metric-title">STRUCTURE CONFLUENCE</div><div class="metric-value" style="color:#00e676;">88/100</div></div>', unsafe_allow_html=True)
@@ -209,42 +194,89 @@ with m3:
 with m4:
     st.markdown('<div class="card-box"><div class="metric-title">ALGO EXECUTION STATUS</div><div class="metric-value" style="color:#29b6f6;">ONLINE</div></div>', unsafe_allow_html=True)
 
-# ----------------- MILLISECOND LIVE TICKER (WEBSOCKET) -----------------
-st.markdown("""
-<div style="background:#11141d; border:1px solid #1f2430; border-radius:8px; padding:15px; margin-bottom:15px; display:flex; justify-content:space-between; align-items:center;">
-    <div>
-        <div style="font-size:12px; color:#88909e; font-weight:bold;">BTC/USDT REAL-TIME FEED (DIRECT TAPE)</div>
-        <div id="liveBtcPrice" style="font-size:32px; font-weight:bold; color:#00e676; margin-top:4px;">Connecting to feed...</div>
-    </div>
-    <div style="text-align:right;">
-        <span style="display:inline-block; width:10px; height:10px; background:#00e676; border-radius:50%; margin-right:6px; animation: pulse 1s infinite;"></span>
-        <span style="font-size:13px; color:#88909e;">Live WebSocket Tape Active (Zero Latency)</span>
-    </div>
-</div>
-
-<script>
-    const priceDisplay = document.getElementById("liveBtcPrice");
-    let ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-    let lastP = 0;
-
-    ws.onmessage = function(event) {
-        const trade = JSON.parse(event.data);
-        const p = parseFloat(trade.p);
-        if (priceDisplay) {
-            priceDisplay.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            if (p >= lastP) {
-                priceDisplay.style.color = "#00e676";
-            } else {
-                priceDisplay.style.color = "#ff5252";
-            }
-            lastP = p;
+# ----------------- DEDICATED LIVE WEBSOCKET COMPONENT (TRUE MILLISECOND TICKER) -----------------
+live_ticker_code = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { margin: 0; padding: 0; background: transparent; font-family: monospace; }
+        .ticker-card {
+            background: #11141d;
+            border: 1px solid #1f2430;
+            border-radius: 8px;
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-    };
-    ws.onerror = function() {
-        if (priceDisplay) priceDisplay.innerText = "$" + (""" + str(current_btc) + """).toFixed(2);
-    };
-</script>
-""", unsafe_allow_html=True)
+        .title { font-size: 11px; color: #88909e; font-weight: bold; letter-spacing: 0.5px; }
+        .price { font-size: 32px; font-weight: bold; color: #00e676; margin-top: 4px; transition: color 0.15s ease; }
+        .badge {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            background: #00e676;
+            border-radius: 50%;
+            margin-right: 6px;
+            box-shadow: 0 0 8px #00e676;
+        }
+        .status-text { font-size: 12px; color: #88909e; }
+    </style>
+</head>
+<body>
+    <div class="ticker-card">
+        <div>
+            <div class="title">BTC/USDT LIVE STREAM (DIRECT TAPE - MS LATENCY)</div>
+            <div id="priceVal" class="price">Connecting...</div>
+        </div>
+        <div style="text-align: right;">
+            <div><span class="badge"></span><span class="status-text">Bybit & Binance WebSocket Active</span></div>
+            <div id="tickCount" style="font-size: 11px; color: #555d6e; margin-top: 4px;">Updates: 0</div>
+        </div>
+    </div>
+
+    <script>
+        const priceEl = document.getElementById("priceVal");
+        const countEl = document.getElementById("tickCount");
+        let lastPrice = 0;
+        let count = 0;
+
+        function connectWs() {
+            const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const p = parseFloat(data.p);
+                count++;
+                
+                priceEl.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                countEl.innerText = "Updates: " + count;
+                
+                if (p > lastPrice) {
+                    priceEl.style.color = "#00e676";
+                } else if (p < lastPrice) {
+                    priceEl.style.color = "#ff5252";
+                }
+                lastPrice = p;
+            };
+
+            ws.onerror = () => {
+                setTimeout(connectWs, 2000);
+            };
+
+            ws.onclose = () => {
+                setTimeout(connectWs, 2000);
+            };
+        }
+        connectWs();
+    </script>
+</body>
+</html>
+"""
+
+components.html(live_ticker_code, height=95)
 
 # ----------------- CONTROLS & MANUAL TRIGGER -----------------
 btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 1])
@@ -325,4 +357,4 @@ if db_records:
     ])
     st.dataframe(table_df, use_container_width=True, hide_index=True)
 else:
-    st.info("Abhi tak koi trade log nahi hui hai. 'Force Execute Signal' button daba kar pehla trade test karein!")
+    st.info("Abhi tak koi trade log nahi hui hai.")
