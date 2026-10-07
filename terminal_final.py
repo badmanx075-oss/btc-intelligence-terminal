@@ -2,237 +2,318 @@ import asyncio
 import json
 import os
 import sqlite3
-import numpy as np
-import websockets
+import time
+from datetime import datetime
 import aiohttp
-from datetime import datetime, timedelta
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-CONFIG_FILE = "config.json"
-SYMBOL = "BTCUSDT"
-DB_NAME = "trades_vault.db"
+app = FastAPI()
 
-TELEGRAM_BOT_TOKEN = ""
-TELEGRAM_CHAT_ID = ""
-
-if os.path.exists(CONFIG_FILE):
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            TELEGRAM_BOT_TOKEN = cfg.get("telegram_bot_token", "")
-            TELEGRAM_CHAT_ID = cfg.get("telegram_chat_id", "")
-    except Exception:
-        pass
-
-candles_1m = []
-candles_15m = []
-live_candle = None
-cvd_current_candle = 0.0
-
-active_trade = None
-sent_events = set()
-last_signal_time = datetime.min
-briefing_history = set()
-
-latest_metrics = {
-    "price": 0.0, "atr_15m": 0.0, "regime": "INITIALIZING",
-    "stage": "STAGE 0: SYNCING", "score": 35,
-    "score_structure": 50, "score_volume": 45, "score_momentum": 50, "score_liquidity": 40,
-    "range_low": 0.0, "range_high": 0.0, "cvd": 0.0, "move_potential": "N/A"
-}
-
-connected_clients = set()
+# Database Setup
+DB_FILE = "trades_vault.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS signals (
-        trade_id TEXT PRIMARY KEY, timestamp TEXT, direction TEXT, stage TEXT,
-        setup_score INTEGER, entry_price REAL, invalidation REAL, t1 REAL,
-        t2 REAL, t3 REAL, extended REAL, potential_move TEXT, status TEXT, mfe REAL DEFAULT 0.0
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS user_trades (trade_id TEXT PRIMARY KEY, user_entry REAL, status TEXT, result TEXT, feedback TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS trade_timeline (id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id TEXT, event_time TEXT, event_name TEXT, price REAL, note TEXT)""")
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id TEXT PRIMARY KEY,
+            time TEXT,
+            direction TEXT,
+            entry REAL,
+            sl REAL,
+            t1 REAL,
+            t2 REAL,
+            t3 REAL,
+            status TEXT,
+            pnl REAL,
+            risk REAL
+        )
+    ''')
     conn.commit()
     conn.close()
 
-def log_timeline_event(trade_id, event_name, price, note=""):
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        now_str = datetime.now().strftime("%H:%M:%S")
-        c.execute("INSERT INTO trade_timeline (trade_id, event_time, event_name, price, note) VALUES (?, ?, ?, ?, ?)", (trade_id, now_str, event_name, price, note))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
+init_db()
 
-def log_trade_db(t):
+def get_db_trades():
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("""INSERT OR REPLACE INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
-            t["id"], t["time"], t["direction"], t["stage"], t["score"], t["entry"], t["sl"], t["t1"],
-            t["t2"], t["t3"], t["extended"], t["potential"], t["status"], t.get("mfe", 0.0)
+        c.execute("SELECT time, id, direction, entry, sl, t1, t2, status FROM trades ORDER BY rowid DESC LIMIT 10")
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+def log_trade_db(t_dict):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            t_dict["id"], t_dict["time"], t_dict["direction"],
+            t_dict["entry"], t_dict["sl"], t_dict["t1"],
+            t_dict["t2"], t_dict["t3"], t_dict["status"],
+            t_dict["pnl"], t_dict["risk"]
         ))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
-def get_recent_trades():
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT trade_id, timestamp, direction, entry_price, invalidation, t1, t2, status FROM signals ORDER BY timestamp DESC LIMIT 8")
-        rows = c.fetchall()
-        conn.close()
-        return [{"id": r[0], "time": r[1], "dir": r[2], "entry": r[3], "sl": r[4], "t1": r[5], "t2": r[6], "status": r[7]} for r in rows]
-    except Exception:
-        return []
+# Config Loader
+def load_config():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r") as f:
+                d = json.load(f)
+                token = d.get("telegram_bot_token", token)
+                chat_id = d.get("telegram_chat_id", chat_id)
+        except Exception:
+            pass
+    return token, chat_id
 
-def get_trade_review_data(trade_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM signals WHERE trade_id=?", (trade_id,))
-    trade = c.fetchone()
-    c.execute("SELECT event_time, event_name, price, note FROM trade_timeline WHERE trade_id=? ORDER BY id ASC", (trade_id,))
-    events = c.fetchall()
-    conn.close()
-    return trade, events
+TG_TOKEN, TG_CHAT_ID = load_config()
 
-async def send_telegram_alert(text: str, keyboard=None, event_key: str = None, target_chat_id=None):
-    if not TELEGRAM_BOT_TOKEN or "YOUR_BOT_TOKEN" in TELEGRAM_BOT_TOKEN:
+async def send_telegram_alert(text: str, keyboard=None):
+    if not TG_TOKEN or not TG_CHAT_ID:
         return
-    chat_to_use = target_chat_id or TELEGRAM_CHAT_ID
-    if event_key:
-        if event_key in sent_events:
-            return
-        sent_events.add(event_key)
-    full_message = "messege from office\n\n" + text
     try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_message(chat_id=chat_to_use, text=full_message, reply_markup=keyboard, parse_mode="Markdown")
+        bot = Bot(token=TG_TOKEN)
+        await bot.send_message(chat_id=TG_CHAT_ID, text=text, parse_mode="Markdown", reply_markup=keyboard)
     except Exception:
         pass
 
-def calculate_atr_15m(candles_15m, period=14):
-    if len(candles_15m) < period + 1:
-        return 250.0
-    highs = np.array([c["high"] for c in candles_15m[-period-1:]])
-    lows = np.array([c["low"] for c in candles_15m[-period-1:]])
-    closes = np.array([c["close"] for c in candles_15m[-period-1:]])
-    tr = np.maximum(highs[1:] - lows[1:], np.maximum(np.abs(highs[1:] - closes[:-1]), np.abs(lows[1:] - closes[:-1])))
-    return float(np.mean(tr[-period:]))
+# Market Data State
+candles_history = []
+current_price = 84500.0
+active_trade = None
+connected_websockets = set()
 
-def detect_regime(candles_15m):
-    if len(candles_15m) < 20:
-        return "UNCLEAR REGIME"
-    closes = np.array([c["close"] for c in candles_15m[-20:]])
-    slope, _ = np.polyfit(np.arange(len(closes)), closes, 1)
-    highs = np.array([c["high"] for c in candles_15m[-20:]])
-    lows = np.array([c["low"] for c in candles_15m[-20:]])
-    range_span = (np.max(highs) - np.min(lows)) / closes[-1]
-    if slope > 2.5:
-        return "BULLISH TREND"
-    elif slope < -2.5:
-        return "BEARISH TREND"
-    elif range_span < 0.015:
-        return "SQUEEZE / COMPRESSION"
-    else:
-        return "RANGE CONSOLIDATION"
+# Preload History (Crash-Proof for Cloud)
+async def preload_history():
+    global candles_history
+    try:
+        url = "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=60"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    try:
+                        data = await resp.json()
+                        list_data = data.get("result", {}).get("list", [])
+                        candles_history = []
+                        for item in reversed(list_data):
+                            candles_history.append({
+                                "t": int(item[0]),
+                                "o": float(item[1]),
+                                "h": float(item[2]),
+                                "l": float(item[3]),
+                                "c": float(item[4]),
+                                "v": float(item[5])
+                            })
+                    except Exception:
+                        candles_history = []
+    except Exception:
+        candles_history = []
 
-def calculate_conditional_probabilities(score, regime):
-    if "TREND" in regime and score >= 82:
-        return {"t1_prob": 76, "t2_prob": 58, "stop_risk": 24}
-    elif "SQUEEZE" in regime:
-        return {"t1_prob": 70, "t2_prob": 50, "stop_risk": 30}
-    else:
-        return {"t1_prob": 64, "t2_prob": 42, "stop_risk": 36}
+async def bybit_ws_feed():
+    global current_price, active_trade
+    ws_url = "wss://stream.bybit.com/v5/public/linear"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(ws_url) as ws:
+                    sub_msg = {"op": "subscribe", "args": ["tickers.BTCUSDT"]}
+                    await ws.send_str(json.dumps(sub_msg))
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            if "data" in data and "lastPrice" in data["data"]:
+                                current_price = float(data["data"]["lastPrice"])
+                                # Update Trade PnL
+                                if active_trade:
+                                    if active_trade["direction"] == "LONG":
+                                        pnl = current_price - active_trade["entry"]
+                                        if current_price >= active_trade["t1"] and active_trade["status"] == "ACTIVE":
+                                            active_trade["status"] = "T1_HIT_BE_ACTIVE"
+                                            active_trade["sl"] = active_trade["entry"] + 10.0
+                                            log_trade_db(active_trade)
+                                            await send_telegram_alert(f"🎯 *T1 HIT (+350 pts)!* SL moved to Breakeven for `{active_trade['id']}`")
+                                    else:
+                                        pnl = active_trade["entry"] - current_price
+                                        if current_price <= active_trade["t1"] and active_trade["status"] == "ACTIVE":
+                                            active_trade["status"] = "T1_HIT_BE_ACTIVE"
+                                            active_trade["sl"] = active_trade["entry"] - 10.0
+                                            log_trade_db(active_trade)
+                                            await send_telegram_alert(f"🎯 *T1 HIT (+350 pts)!* SL moved to Breakeven for `{active_trade['id']}`")
+                                    active_trade["pnl"] = round(pnl, 1)
 
-def point_move_classifier(atr_15m, regime):
-    if "SQUEEZE" in regime:
-        return "EXTENDED RUN (5,000 - 10,000+ pts)", 92
-    elif "TREND" in regime:
-        return "LARGE MOVE (2,000 - 5,000 pts)", 82
-    elif atr_15m > 250:
-        return "MEDIUM MOVE (1,000 - 2,000 pts)", 70
-    else:
-        return "SMALL MOVE (500 - 1,000 pts)", 55
+                                # Broadcast
+                                payload = {
+                                    "price": current_price,
+                                    "active_trade": active_trade,
+                                    "history": candles_history[-40:] if candles_history else []
+                                }
+                                for ws_client in list(connected_websockets):
+                                    try:
+                                        await ws_client.send_text(json.dumps(payload))
+                                    except Exception:
+                                        connected_websockets.discard(ws_client)
+        except Exception:
+            await asyncio.sleep(2)
 
-def evaluate_market_stages(candles_1m, candles_15m):
-    global latest_metrics, last_signal_time
-    if len(candles_15m) < 25 or len(candles_1m) < 30:
-        return "STAGE 0: SYNCING", 35, {}
-    recent_15m = candles_15m[-25:]
-    highs_15m = np.array([c["high"] for c in recent_15m])
-    lows_15m = np.array([c["low"] for c in recent_15m])
-    curr_close = candles_1m[-1]["close"]
-    atr_macro = calculate_atr_15m(candles_15m, 14)
-    regime = detect_regime(candles_15m)
-    move_desc, move_score = point_move_classifier(atr_macro, regime)
-    range_high = float(np.max(highs_15m[:-2]))
-    range_low = float(np.min(lows_15m[:-2]))
-    recent_1m = candles_1m[-30:]
-    cvds = np.array([c["cvd"] for c in recent_1m])
-    volumes = np.array([c["vol"] for c in recent_1m])
-    avg_vol = np.mean(volumes[:-1])
-    is_vol_surge = volumes[-1] > (1.8 * avg_vol)
-    
-    bullish_cvd_div = (curr_close <= range_low + (0.45 * atr_macro)) and (cvds[-1] > cvds[-5])
-    bearish_cvd_div = (curr_close >= range_high - (0.45 * atr_macro)) and (cvds[-1] < cvds[-5])
-    near_support = curr_close <= (range_low + (0.25 * atr_macro))
-    near_resistance = curr_close >= (range_high - (0.25 * atr_macro))
-    
-    score_structure = 85 if "TREND" in regime else 60
-    score_volume = 85 if is_vol_surge else 50
-    score_momentum = 80 if (bullish_cvd_div or bearish_cvd_div) else 45
-    score_liquidity = 90 if (near_support or near_resistance) else 40
-    
-    meta = {
-        "price": curr_close, "atr_15m": round(atr_macro, 1), "regime": regime,
-        "range_low": round(range_low, 1), "range_high": round(range_high, 1),
-        "potential": move_desc, "move_score": move_score, "cvd": round(cvds[-1], 2),
-        "score_structure": score_structure, "score_volume": score_volume,
-        "score_momentum": score_momentum, "score_liquidity": score_liquidity
+@app.on_event("startup")
+async def startup_event():
+    await preload_history()
+    asyncio.create_task(bybit_ws_feed())
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    connected_websockets.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        connected_websockets.discard(websocket)
+
+@app.post("/trigger_override")
+async def trigger_override():
+    global active_trade
+    tid = f"MANUAL-{int(time.time()) % 1000000}"
+    active_trade = {
+        "id": tid,
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "direction": "LONG",
+        "entry": round(current_price, 1),
+        "sl": round(current_price - 180.0, 1),
+        "t1": round(current_price + 350.0, 1),
+        "t2": round(current_price + 700.0, 1),
+        "t3": round(current_price + 1400.0, 1),
+        "status": "ACTIVE",
+        "pnl": 0.0,
+        "risk": 15.0
     }
-    
-    cooldown_active = (datetime.now() - last_signal_time) < timedelta(minutes=40)
-    
-    if (bullish_cvd_div or near_support) and regime != "BEARISH TREND" and not cooldown_active:
-        score = 86
-        sl_buffer = max(180.0, 0.6 * atr_macro)
-        probs = calculate_conditional_probabilities(score, regime)
-        meta.update({
-            "direction": "LONG", "entry_zone": f"${round(curr_close - 40, 1)} - ${round(curr_close + 40, 1)}",
-            "sl": round(curr_close - sl_buffer, 1), "t1": round(curr_close + max(350.0, 1.2 * atr_macro), 1),
-            "t2": round(curr_close + max(700.0, 2.5 * atr_macro), 1), "t3": round(curr_close + max(1400.0, 4.5 * atr_macro), 1),
-            "extended": round(curr_close + max(2800.0, 8.0 * atr_macro), 1), "probs": probs
-        })
-        stage = "STAGE 2: MACRO EARLY LONG SETUP"
-        latest_metrics = {**meta, "stage": stage, "score": score}
-        return stage, score, meta
-        
-    elif (bearish_cvd_div or near_resistance) and regime != "BULLISH TREND" and not cooldown_active:
-        score = 86
-        sl_buffer = max(180.0, 0.6 * atr_macro)
-        probs = calculate_conditional_probabilities(score, regime)
-        meta.update({
-            "direction": "SHORT", "entry_zone": f"${round(curr_close - 40, 1)} - ${round(curr_close + 40, 1)}",
-            "sl": round(curr_close + sl_buffer, 1), "t1": round(curr_close - max(350.0, 1.2 * atr_macro), 1),
-            "t2": round(curr_close - max(700.0, 2.5 * atr_macro), 1), "t3": round(curr_close - max(1400.0, 4.5 * atr_macro), 1),
-            "extended": round(curr_close - max(2800.0, 8.0 * atr_macro), 1), "probs": probs
-        })
-        stage = "STAGE 2: MACRO EARLY SHORT SETUP"
-        latest_metrics = {**meta, "stage": stage, "score": score}
-        return stage, score, meta
-        
-    current_s = 70 if (is_vol_surge or near_support or near_resistance) else 38
-    stage = f"STAGE 1: WATCHLIST ({regime})" if current_s >= 65 else f"STAGE 0: {regime}"
+    log_trade_db(active_trade)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🟢 TRADE TAKEN", callback_data=f"take_{tid}"),
+        InlineKeyboardButton("⚪ IGNORE", callback_data=f"ignore_{tid}")
+    ]])
+    await send_telegram_alert(
+        f"🚨 *STAGE 2/3 EXECUTION TICKET*\n\n"
+        f"ID: `{tid}`\nDirection: *LONG*\nEntry: *${active_trade['entry']:,.1f}*\n"
+        f"SL: *${active_trade['sl']:,.1f}* (Risk: Fixed $15)\n"
+        f"T1: *${active_trade['t1']:,.1f}* (+350 pts)\n"
+        f"T2: *${active_trade['t2']:,.1f}* (+700 pts)",
+        keyboard=kb
+    )
+    return {"status": "success", "trade": active_trade}
+
+@app.post("/reset_trade")
+async def reset_trade():
+    global active_trade
+    active_trade = None
+    return {"status": "reset"}
+
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    rows = get_db_trades()
+    table_html = ""
+    for r in rows:
+        table_html += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td style='color:#00e676;'>{r[2]}</td><td>${r[3]:,.1f}</td><td>${r[4]:,.1f}</td><td>${r[5]:,.1f}</td><td>${r[6]:,.1f}</td><td>{r[7]}</td></tr>"
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>BTC Intelligence Terminal</title>
+        <style>
+            body {{ background-color: #0b0e14; color: #d1d4dc; font-family: monospace; margin: 0; padding: 15px; }}
+            .card {{ background: #131722; border: 1px solid #2a2e39; border-radius: 6px; padding: 15px; margin-bottom: 15px; }}
+            .grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }}
+            .stat-box {{ background: #181d28; border: 1px solid #2a2e39; padding: 12px; border-radius: 4px; text-align: center; }}
+            .stat-val {{ font-size: 20px; font-weight: bold; color: #29b6f6; }}
+            .btn {{ background: #7c4dff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-right: 8px; }}
+            .btn-reset {{ background: #455a64; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+            th, td {{ border: 1px solid #2a2e39; padding: 8px; text-align: left; font-size: 12px; }}
+            th {{ background: #181d28; }}
+        </style>
+    </head>
+    <body>
+        <div class="grid">
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">STRUCTURE SCORE</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">VOLUME / DELTA</div><div class="stat-val" style="color:#00e676;">85/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">MOMENTUM SQUEEZE</div><div class="stat-val" style="color:#ffb300;">45/100</div></div>
+            <div class="stat-box"><div style="font-size:11px;color:#787b86;">LIQUIDITY PROXIMITY</div><div class="stat-val" style="color:#ab47bc;">40/100</div></div>
+        </div>
+
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <div><strong style="color:#fff;">BTC/USDT LIVE STREAM:</strong> <span id="btcPrice" style="color:#ffb300; font-size:18px;">Connecting...</span></div>
+                <div>
+                    <button class="btn" onclick="triggerOverride()">⚡ Force Signal Trigger</button>
+                    <button class="btn btn-reset" onclick="resetTrade()">Reset Trade</button>
+                </div>
+            </div>
+            <div id="tradeBanner" style="background:#181d28; border:1px solid #2a2e39; padding:12px; border-radius:4px;">
+                NO ACTIVE TRADE IN RUNNER
+            </div>
+        </div>
+
+        <div class="card">
+            <strong style="color:#fff;">PERSISTENT SIGNALS VAULT (DATABASE AUDIT)</strong>
+            <table>
+                <thead>
+                    <tr><th>Time</th><th>Trade ID</th><th>Direction</th><th>Entry</th><th>Invalidation</th><th>Target 1</th><th>Target 2</th><th>Outcome Status</th></tr>
+                </thead>
+                <tbody id="vaultBody">
+                    {table_html}
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            const host = window.location.host;
+            const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+            const ws = new WebSocket(`${{wsProtocol}}//${{host}}/ws`);
+
+            ws.onmessage = function(event) {{
+                const data = JSON.parse(event.data);
+                document.getElementById("btcPrice").innerText = "$" + data.price.toLocaleString("en-US", {{minimumFractionDigits: 1}});
+                const banner = document.getElementById("tradeBanner");
+                if (data.active_trade) {{
+                    const t = data.active_trade;
+                    banner.innerHTML = `<span style="background:#00e676;color:#000;padding:2px 6px;border-radius:3px;font-weight:bold;">${{t.direction}}</span> <strong>${{t.id}}</strong> | Entry: $${{t.entry}} | SL: $${{t.sl}} | T1: $${{t.t1}} | PnL: <strong>${{t.pnl}} pts</strong> | Status: <span style="color:#ffb300;">${{t.status}}</span>`;
+                }} else {{
+                    banner.innerHTML = "NO ACTIVE TRADE IN RUNNER";
+                }}
+            }};
+
+            function triggerOverride() {{
+                fetch("/trigger_override", {{method: "POST"}});
+            }}
+
+            function resetTrade() {{
+                fetch("/reset_trade", {{method: "POST"}});
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
+if __name__ == "__main__":
+    uvicorn.run("terminal_final.py:app", host="127.0.0.1", port=8000, reload=False)
+
+STAGE 1: WATCHLIST ({regime})" if current_s >= 65 else f"STAGE 0: {regime}"
     latest_metrics = {**meta, "stage": stage, "score": current_s}
     return stage, 38, meta
 
