@@ -8,7 +8,6 @@ import random
 import time
 import threading
 from datetime import datetime
-import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Terminal")
 
@@ -134,7 +133,7 @@ def scanner_thread():
                         active["status"] = "T1_HIT_BE"
                         active["sl"] = entry + 10.0
                         save_trade_db(active)
-                        send_telegram_alert("TARGET 1 HIT for " + active["trade_id"])
+                        send_telegram_alert("🎯 TARGET 1 HIT! Stop Loss shifted to BE for " + active["trade_id"])
                     elif curr_p <= sl:
                         closed = True
                         outcome = "STOP LOSS HIT"
@@ -147,7 +146,7 @@ def scanner_thread():
                         active["status"] = "T1_HIT_BE"
                         active["sl"] = entry - 10.0
                         save_trade_db(active)
-                        send_telegram_alert("TARGET 1 HIT for " + active["trade_id"])
+                        send_telegram_alert("🎯 TARGET 1 HIT! Stop Loss shifted to BE for " + active["trade_id"])
                     elif curr_p <= sl:
                         closed = True
                         outcome = "STOP LOSS HIT"
@@ -158,7 +157,7 @@ def scanner_thread():
                     active["pnl"] = final_pnl
                     active["feedback"] = fb
                     save_trade_db(active)
-                    rep = "TRADE CLOSED\nID: " + active["trade_id"] + "\nOutcome: " + outcome + "\nPnL: " + str(final_pnl)
+                    rep = "🏁 TRADE CLOSED\nID: " + active["trade_id"] + "\nOutcome: " + outcome + "\nPnL: " + str(final_pnl)
                     send_telegram_alert(rep)
                     state["active_trade"] = None
                     save_state(state)
@@ -205,7 +204,7 @@ def scanner_thread():
                     state["active_trade"] = new_trade
                     save_state(state)
 
-                    ticket = "SIGNAL EXECUTED\nID: " + tid + "\nDir: " + direction + " @ $" + str(round(curr_p, 1)) + "\nConfidence: " + str(conf) + "%\nSL: $" + str(sl_val) + "\nT1: $" + str(t1_val) + "\nT2: $" + str(t2_val) + "\nWhy: " + r_txt + "\nNote: " + n_txt
+                    ticket = "🚨 SIGNAL EXECUTED\nID: " + tid + "\nDir: " + direction + " @ $" + str(round(curr_p, 1)) + "\nConfidence: " + str(conf) + "%\nSL: $" + str(sl_val) + "\nT1: $" + str(t1_val) + "\nT2: $" + str(t2_val) + "\nWhy: " + r_txt + "\nNote: " + n_txt
                     send_telegram_alert(ticket)
 
         except Exception:
@@ -242,25 +241,36 @@ m2.metric("ORDERFLOW / DELTA", "94/100")
 m3.metric("MOMENTUM SQUEEZE", "78/100")
 m4.metric("SCANNER STATUS", "ONLINE")
 
-components.html("""
-<div style="background:#11141d;border:1px solid #1f2430;border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;font-family:monospace;color:#d1d4dc;">
-    <div>
-        <div style="font-size:11px;color:#88909e;">BTC/USDT LIVE STREAM</div>
-        <div id="pVal" style="font-size:28px;font-weight:bold;color:#00e676;">Connecting...</div>
-    </div>
-    <div style="text-align:right;">
-        <div style="font-size:12px;color:#88909e;">WebSocket Feed</div>
-        <div id="uCount" style="font-size:11px;color:#555d6e;">Ticks: 0</div>
-    </div>
-</div>
-<script>
-var pEl = document.getElementById("pVal");
-var uEl = document.getElementById("uCount");
-var last = 0;
-var count = 0;
-var ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-ws.onmessage = function(e) {
-    var d = JSON.parse(e.data);
+st.metric("BTC/USDT LIVE PRICE", "$" + str(round(current_btc, 2)))
+
+b1, b2 = st.columns(2)
+with b1:
+    if st.button("Force Scan / Refresh Price", use_container_width=True):
+        st.rerun()
+with b2:
+    if st.button("Reset Active Trade", use_container_width=True):
+        shared["active_trade"] = None
+        save_state(shared)
+        st.rerun()
+
+if active_trade:
+    t = active_trade
+    pnl = round(current_btc - t["entry"] if t["direction"] == "LONG" else t["entry"] - current_btc, 1)
+    st.info("ACTIVE: " + t["direction"] + " [" + t["trade_id"] + "] | Entry: $" + str(t["entry"]) + " | SL: $" + str(t["sl"]) + " | T1: $" + str(t["target_1"]) + " | PnL: " + str(pnl) + " pts")
+    st.write("Reason: " + t["reason"])
+    st.write("Trader Note: " + t["remarks"])
+else:
+    st.caption("🟢 Background Engine Scanner Active: Continuous scanning mode.")
+
+st.subheader("Persistent Signals Vault")
+db_records = get_db_trades()
+if db_records:
+    cols = ["Timestamp", "Trade ID", "Direction", "Entry", "SL", "Target 1", "Target 2", "Confidence", "Rating", "Status", "PnL", "Feedback"]
+    df = pd.DataFrame(db_records, columns=cols)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.info("Scanner running. Setups will populate here automatically.")
+rse(e.data);
     var p = parseFloat(d.p);
     count++;
     pEl.innerText = "$" + p.toFixed(2);
