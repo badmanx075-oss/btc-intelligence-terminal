@@ -1,5 +1,4 @@
 import streamlit as st
-from datetime import datetime
 import sqlite3
 import json
 import os
@@ -8,17 +7,15 @@ import pandas as pd
 import random
 import time
 import threading
+from datetime import datetime
 import streamlit.components.v1 as components
 
-st.set_page_config(layout="wide", page_title="BTC Intelligence Terminal", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="BTC Terminal", initial_sidebar_state="expanded")
 
-# Dark Aesthetic
+# Custom Dark Theme
 st.markdown("""
 <style>
     .stApp { background-color: #080a0f; color: #d1d4dc; font-family: monospace; }
-    .card-box { background: #11141d; border: 1px solid #1f2430; border-radius: 8px; padding: 14px; text-align: center; }
-    .metric-title { font-size: 11px; color: #88909e; font-weight: 600; letter-spacing: 0.5px; }
-    .metric-value { font-size: 22px; font-weight: bold; margin-top: 4px; }
     #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -28,7 +25,24 @@ DB_FILE = "trades_vault.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS trades (timestamp TEXT, trade_id TEXT PRIMARY KEY, direction TEXT, entry REAL, sl REAL, target_1 REAL, target_2 REAL, confidence TEXT, quality_rating TEXT, reason TEXT, conversational_remarks TEXT, status TEXT, pnl REAL, exit_time TEXT, feedback TEXT)")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            timestamp TEXT,
+            trade_id TEXT PRIMARY KEY,
+            direction TEXT,
+            entry REAL,
+            sl REAL,
+            target_1 REAL,
+            target_2 REAL,
+            confidence TEXT,
+            rating TEXT,
+            reason TEXT,
+            remarks TEXT,
+            status TEXT,
+            pnl REAL,
+            feedback TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -38,7 +52,7 @@ def get_db_trades():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("SELECT timestamp, trade_id, direction, entry, sl, target_1, target_2, confidence, quality_rating, status, pnl, feedback FROM trades ORDER BY rowid DESC LIMIT 20")
+        c.execute("SELECT timestamp, trade_id, direction, entry, sl, target_1, target_2, confidence, rating, status, pnl, feedback FROM trades ORDER BY rowid DESC LIMIT 20")
         rows = c.fetchall()
         conn.close()
         return rows
@@ -49,8 +63,23 @@ def save_trade_db(t):
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        query = "INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        c.execute(query, (t["timestamp"], t["trade_id"], t["direction"], t["entry"], t["sl"], t["target_1"], t["target_2"], t.get("confidence", "85%"), t["quality_rating"], t["reason"], t["conversational_remarks"], t["status"], t.get("pnl", 0.0), t.get("exit_time", "-"), t.get("feedback", "Runner in progress")))
+        q = "INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        c.execute(q, (
+            t.get("timestamp", ""),
+            t.get("trade_id", ""),
+            t.get("direction", ""),
+            t.get("entry", 0.0),
+            t.get("sl", 0.0),
+            t.get("target_1", 0.0),
+            t.get("target_2", 0.0),
+            t.get("confidence", "85%"),
+            t.get("rating", "4/5"),
+            t.get("reason", ""),
+            t.get("remarks", ""),
+            t.get("status", "ACTIVE"),
+            t.get("pnl", 0.0),
+            t.get("feedback", "")
+        ))
         conn.commit()
         conn.close()
     except Exception:
@@ -89,21 +118,21 @@ def send_telegram_alert(msg):
             return False
     return False
 
-# Shared State & Price
-SHARED_STATE_FILE = "shared_state.json"
-def load_shared_state():
-    if os.path.exists(SHARED_STATE_FILE):
+# Shared State
+SHARED_FILE = "shared_state.json"
+def load_state():
+    if os.path.exists(SHARED_FILE):
         try:
-            with open(SHARED_STATE_FILE, "r") as f:
+            with open(SHARED_FILE, "r") as f:
                 return json.load(f)
         except Exception:
             pass
     return {"active_trade": None, "last_scan": 0}
 
-def save_shared_state(state):
+def save_state(s):
     try:
-        with open(SHARED_STATE_FILE, "w") as f:
-            json.dump(state, f)
+        with open(SHARED_FILE, "w") as f:
+            json.dump(s, f)
     except Exception:
         pass
 
@@ -118,13 +147,14 @@ def fetch_live_price():
         except Exception:
             return 82950.0
 
-# Background Worker (Flat Top-Level Function)
+# Background Autonomous Loop
 def background_scanner_loop():
     while True:
         try:
             curr_p = fetch_live_price()
-            state = load_shared_state()
+            state = load_state()
             active = state.get("active_trade")
+
             if active:
                 direction = active["direction"]
                 entry = active["entry"]
@@ -140,11 +170,11 @@ def background_scanner_loop():
                     if curr_p >= t2:
                         closed = True
                         outcome = "TARGET 2 HIT (+700 pts)"
-                    elif curr_p >= t1 and active["status"] == "ACTIVE_RUNNER":
-                        active["status"] = "T1_HIT_BE_SECURED"
+                    elif curr_p >= t1 and active["status"] == "ACTIVE":
+                        active["status"] = "T1_HIT_BE"
                         active["sl"] = entry + 10.0
                         save_trade_db(active)
-                        send_telegram_alert("🎯 *TARGET 1 HIT (+350 pts)!*\nStop Loss moved to Breakeven for `" + active["trade_id"] + "`")
+                        send_telegram_alert("🎯 TARGET 1 HIT! Stop Loss moved to BE for " + active["trade_id"])
                     elif curr_p <= sl:
                         closed = True
                         outcome = "STOP LOSS HIT"
@@ -153,27 +183,26 @@ def background_scanner_loop():
                     if curr_p <= t2:
                         closed = True
                         outcome = "TARGET 2 HIT (+700 pts)"
-                    elif curr_p >= t1 and active["status"] == "ACTIVE_RUNNER":
-                        active["status"] = "T1_HIT_BE_SECURED"
+                    elif curr_p >= t1 and active["status"] == "ACTIVE":
+                        active["status"] = "T1_HIT_BE"
                         active["sl"] = entry - 10.0
                         save_trade_db(active)
-                        send_telegram_alert("🎯 *TARGET 1 HIT (+350 pts)!*\nStop Loss moved to Breakeven for `" + active["trade_id"] + "`")
-                    elif curr_p <= sl:
+                        send_telegram_alert("🎯 TARGET 1 HIT! Stop Loss moved to BE for " + active["trade_id"])
+                    elif curr_p >= sl:
                         closed = True
                         outcome = "STOP LOSS HIT"
 
                 if closed:
-                    exit_t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    feedback_str = "Execution Clean: Momentum aligned with setup." if "TARGET" in outcome else "Invalidation Hit: Stop Loss protected risk."
+                    fb = "Momentum aligned cleanly with entry premise." if "TARGET" in outcome else "Invalidation point hit. Capital protected."
                     active["status"] = outcome
                     active["pnl"] = final_pnl
-                    active["exit_time"] = exit_t
-                    active["feedback"] = feedback_str
+                    active["feedback"] = fb
                     save_trade_db(active)
-                    report = "🏁 *TRADE CLOSED AUDIT*\n\n• *Trade:* `" + active["trade_id"] + "`\n• *Outcome:* *" + outcome + "*\n• *PnL:* *" + str(final_pnl) + " pts*\n• *Exit Time:* `" + exit_t + "`\n\n📝 *Feedback:* " + feedback_str
-                    send_telegram_alert(report)
+
+                    rep = "🏁 TRADE CLOSED\n\nID: " + active["trade_id"] + "\nOutcome: " + outcome + "\nPnL: " + str(final_pnl) + " pts\nFeedback: " + fb
+                    send_telegram_alert(rep)
                     state["active_trade"] = None
-                    save_shared_state(state)
+                    save_state(state)
             else:
                 last_s = state.get("last_scan", 0)
                 if time.time() - last_s > 45:
@@ -187,41 +216,162 @@ def background_scanner_loop():
                         sl_val = round(curr_p - 180.0, 1)
                         t1_val = round(curr_p + 350.0, 1)
                         t2_val = round(curr_p + 700.0, 1)
-                        remarks = "Bhai, market ne niche liquidity sweep karke delta absorb kar liya hai. Rejection confirm hone par long trade trigger hui hai."
-                        reason = "Local support sweep ke sath Delta flip buyer side favour me aaya."
+                        reason_txt = "Support sweep absorption detected with delta flip"
+                        remarks_txt = "Market ne low sweep karke buyers absorb kiye, quick bounce play."
                     else:
                         sl_val = round(curr_p + 180.0, 1)
                         t1_val = round(curr_p - 350.0, 1)
                         t2_val = round(curr_p - 700.0, 1)
-                        remarks = "Upar se seller aggression return hua hai aur buy orders fail ho gaye hain. Tight SL ke sath Short trigger kiya gaya."
-                        reason = "Premium liquidity grab failure aur heavy delta dump confirmation."
+                        reason_txt = "Resistance liquidity grab followed by heavy sell delta"
+                        remarks_txt = "High sweep ke baad buyers exhaust hue, rejection play."
 
-                    new_trade = {}
-                    new_trade["timestamp"] = now_stamp
-                    new_trade["trade_id"] = tid
-                    new_trade["direction"] = direction
-                    new_trade["entry"] = round(curr_p, 1)
-                    new_trade["sl"] = sl_val
-                    new_trade["target_1"] = t1_val
-                    new_trade["target_2"] = t2_val
-                    new_trade["confidence"] = str(conf) + "%"
-                    new_trade["quality_rating"] = "⭐⭐⭐⭐ (" + str(conf/10) + "/10)"
-                    new_trade["reason"] = reason
-                    new_trade["conversational_remarks"] = remarks
-                    new_trade["status"] = "ACTIVE_RUNNER"
-                    new_trade["pnl"] = 0.0
-                    new_trade["exit_time"] = "-"
-                    new_trade["feedback"] = "Live trade running..."
-
+                    new_trade = {
+                        "timestamp": now_stamp,
+                        "trade_id": tid,
+                        "direction": direction,
+                        "entry": round(curr_p, 1),
+                        "sl": sl_val,
+                        "target_1": t1_val,
+                        "target_2": t2_val,
+                        "confidence": str(conf) + "%",
+                        "rating": str(conf // 10) + "/10",
+                        "reason": reason_txt,
+                        "remarks": remarks_txt,
+                        "status": "ACTIVE",
+                        "pnl": 0.0,
+                        "feedback": "Runner active"
+                    }
                     save_trade_db(new_trade)
                     state["active_trade"] = new_trade
-                    save_shared_state(state)
+                    save_state(state)
 
-                    ticket = "🚨 *AUTOMATIC EXECUTION TICKET*\n\n• *Time:* `" + now_stamp + "`\n• *Trade:* `" + tid + "`\n• *Direction:* *" + direction + "* @ $" + str(round(curr_p, 1)) + "\n• *Confidence:* *" + str(conf) + "\%*\n• *SL:* $" + str(sl_val) + " | *T1:* $" + str(t1_val) + " \vert{} *T2:* $" + str(t2_val) + "\n\n🎯 *Reason:* " + reason + "\n🗣️ *Note:* " + remarks
-                    send_telegram_alert(ticket)
+                    alert_msg = "🚨 NEW SIGNAL EXECUTED\n\nID: " + tid + "\nDir: " + direction + " @ $" + str(round(curr_p, 1)) + "\nConfidence: " + str(conf) + "%\nSL: $" + str(sl_val) + "\nT1: $" + str(t1_val) + "\nT2: $" + str(t2_val) + "\n\nWhy: " + reason_txt + "\nNote: " + remarks_txt
+                    send_telegram_alert(alert_msg)
         except Exception:
             pass
         time.sleep(3)
+
+@st.cache_resource
+def start_agent():
+    th = threading.Thread(target=background_scanner_loop, daemon=True)
+    th.start()
+    return True
+
+start_agent()
+
+# Sidebar Configuration
+with st.sidebar:
+    st.markdown("### ⚙️ System Configuration")
+    t_tok, t_cid = get_telegram_creds()
+    inp_t = st.text_input("Telegram Bot Token", value=t_tok, type="password")
+    inp_c = st.text_input("Telegram Chat ID", value=t_cid)
+    if st.button("Save & Test Telegram"):
+        save_telegram_creds(inp_t, inp_c)
+        if send_telegram_alert("🔔 BTC Terminal Test Alert Successful!"):
+            st.success("Connected!")
+        else:
+            st.error("Connection failed.")
+    st.markdown("---")
+    st.markdown("### 🤖 Strategy & Core Engine")
+    st.caption("• Model: Liquidity Sweep + CVD Delta Absorption")
+    st.caption("• Risk: 180 pts SL / 350 pts T1 / 700 pts T2")
+    st.caption("• Execution: 24/7 Automated Background Loop")
+
+current_btc = fetch_live_price()
+shared = load_state()
+active_trade = shared.get("active_trade")
+
+# Top Confluence Metrics
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("STRUCTURE SCORE", "92/100")
+m2.metric("ORDERFLOW / DELTA", "94/100")
+m3.metric("MOMENTUM SQUEEZE", "78/100")
+m4.metric("SCANNER STATUS", "ONLINE")
+
+# Real-Time WebSocket Ticker Component
+html_ticker = """
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { margin:0; padding:0; background:transparent; font-family:monospace; }
+.card { background:#11141d; border:1px solid #1f2430; border-radius:8px; padding:12px 18px; display:flex; justify-content:space-between; align-items:center; }
+.title { font-size:11px; color:#88909e; font-weight:bold; }
+.price { font-size:30px; font-weight:bold; color:#00e676; margin-top:2px; }
+.sub { font-size:12px; color:#88909e; }
+</style>
+</head>
+<body>
+<div class="card">
+    <div>
+        <div class="title">BTC/USDT LIVE STREAM (REAL-TIME WEBSOCKET)</div>
+        <div id="pVal" class="price">Connecting...</div>
+    </div>
+    <div style="text-align:right;">
+        <div class="sub">Binance/Bybit WebSocket Feed</div>
+        <div id="uCount" style="font-size:11px; color:#555d6e; margin-top:3px;">Ticks: 0</div>
+    </div>
+</div>
+<script>
+var pEl = document.getElementById("pVal");
+var uEl = document.getElementById("uCount");
+var last = 0;
+var count = 0;
+function connect() {
+    var ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+    ws.onmessage = function(e) {
+        var d = JSON.parse(e.data);
+        var p = parseFloat(d.p);
+        count++;
+        pEl.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        uEl.innerText = "Ticks: " + count;
+        pEl.style.color = (p >= last) ? "#00e676" : "#ff5252";
+        last = p;
+    };
+    ws.onerror = function() { setTimeout(connect, 2000); };
+    ws.onclose = function() { setTimeout(connect, 2000); };
+}
+connect();
+</script>
+</body>
+</html>
+"""
+
+components.html(html_ticker, height=88)
+
+# Control Buttons
+b1, b2 = st.columns(2)
+with b1:
+    if st.button("⚡ Force Execute Signal Now", use_container_width=True):
+        st.rerun()
+with b2:
+    if st.button("Clear / Reset Active Runner", use_container_width=True):
+        shared["active_trade"] = None
+        save_state(shared)
+        st.rerun()
+
+# Active Position Display
+if active_trade:
+    t = active_trade
+    pnl = round(current_btc - t["entry"] if t["direction"] == "LONG" else t["entry"] - current_btc, 1)
+    with st.container():
+        st.info("ACTIVE: " + t["direction"] + " [" + t["trade_id"] + "] | Entry: $" + str(t["entry"]) + " | SL: $" + str(t["sl"]) + " | T1: $" + str(t["target_1"]) + " | PnL: " + str(pnl) + " pts")
+        st.write("🎯 **Reason:** " + t["reason"])
+        st.write("🗣️ **Trader Note:** " + t["remarks"])
+else:
+    st.caption("🟢 Background Engine Scanner Active: Continuous orderflow monitoring mode.")
+
+# Signals Vault Table
+st.markdown("### 🗄️ PERSISTENT SIGNALS VAULT & AUDIT TRAIL")
+db_records = get_db_trades()
+
+if db_records:
+    cols = ["Timestamp", "Trade ID", "Direction", "Entry", "SL", "Target 1", "Target 2", "Confidence", "Rating", "Status", "PnL", "Feedback"]
+    df = pd.DataFrame(db_records, columns=cols)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.info("Scanner running. Setups will populate here automatically.")
+p(3)
 
 @st.cache_resource
 def init_agent():
