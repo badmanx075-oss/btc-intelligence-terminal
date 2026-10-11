@@ -702,7 +702,7 @@ with tab3:
 
             if st.button("Submit & Save Feedback to Ledger", use_container_width=True):
                 update_user_feedback(sel_tid, f_verdict, u_entry, u_exit, u_notes)
-                st.success(f"Feedback successfully saved for {sel_tid}!")
+                st.success("Feedback successfully saved for " + str(sel_tid) + "!")
                 time.sleep(1)
                 st.rerun()
 
@@ -715,19 +715,21 @@ with tab3:
             conn.close()
 
             if t_data:
-                st.markdown(f"""
+                # Clean HTML concatenation without any LaTeX symbols
+                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " \vert{} T2: $" + "{:,.1f}".format(t_data[7])
+                st.markdown("""
                 <div class="card-box" style="font-size:12px; line-height: 1.6;">
-                    <div><strong>Trade ID:</strong> {t_data[1]} ({t_data[2]})</div>
-                    <div><strong>Timestamp:</strong> {t_data[0]}</div>
-                    <div><strong>Regime at Signal:</strong> <span style="color:#29b6f6;">{t_data[8]}</span></div>
-                    <div><strong>Theoretical Entry / SL:</strong> ${t_data[3]:,.1f} /${t_data[5]:,.1f}</div>
-                    <div><strong>Targets:</strong> T1: ${t_data[6]:,.1f} \vert{} T2:${t_data[7]:,.1f}</div>
-                    <div><strong>Max Favorable Excursion (MFE):</strong> <span style="color:#00e676;">+{t_data[10]:,.1f} pts</span></div>
-                    <div><strong>Max Adverse Excursion (MAE):</strong> <span style="color:#ff5252;">{t_data[11]:,.1f} pts</span></div>
-                    <div><strong>System Reason:</strong> {t_data[12]}</div>
+                    <div><strong>Trade ID:</strong> """ + str(t_data[1]) + " (" + str(t_data[2]) + """)</div>
+                    <div><strong>Timestamp:</strong> """ + str(t_data[0]) + """</div>
+                    <div><strong>Regime at Signal:</strong> <span style="color:#29b6f6;">""" + str(t_data[8]) + """</span></div>
+                    <div><strong>Theoretical Entry / SL:</strong> $""" + "{:,.1f}".format(t_data[3]) + " / $" + "{:,.1f}".format(t_data[5]) + """</div>
+                    <div><strong>Targets:</strong> """ + t_targets_text + """</div>
+                    <div><strong>Max Favorable Excursion (MFE):</strong> <span style="color:#00e676;">+""" + "{:,.1f}".format(t_data[10]) + """ pts</span></div>
+                    <div><strong>Max Adverse Excursion (MAE):</strong> <span style="color:#ff5252;">""" + "{:,.1f}".format(t_data[11]) + """ pts</span></div>
+                    <div><strong>System Reason:</strong> """ + str(t_data[12]) + """</div>
                     <hr style="border:0; border-top:1px solid #1c2230; margin:6px 0;">
-                    <div><strong>User Marked Feedback:</strong> <span style="color:#ffb300;">{t_data[14]}</span></div>
-                    <div><strong>User Comment:</strong> {t_data[15] if t_data[15] else "No commentary submitted yet."}</div>
+                    <div><strong>User Marked Feedback:</strong> <span style="color:#ffb300;">""" + str(t_data[14]) + """</span></div>
+                    <div><strong>User Comment:</strong> """ + str(t_data[15] if t_data[15] else "No commentary submitted yet.") + """</div>
                 </div>
                 """, unsafe_allow_html=True)
     else:
@@ -737,7 +739,6 @@ with tab3:
 with tab4:
     st.markdown("##### 📅 INSTITUTIONAL PERFORMANCE SUMMARIES & SCHEDULED BRIEFINGS")
     
-    # Scheduled Briefings Simulator
     b_col1, b_col2 = st.columns(2)
     with b_col1:
         st.markdown("""
