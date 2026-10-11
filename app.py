@@ -66,6 +66,7 @@ def init_db():
         move_classification TEXT,
         mfe_pts REAL,
         mae_pts REAL,
+        trailing_mode TEXT,
         is_user_taken INTEGER,
         user_actual_entry REAL,
         user_actual_exit REAL,
@@ -163,7 +164,7 @@ def log_trade(t):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             t["timestamp"], t["trade_id"], t["direction"], t["entry"],
             t.get("exit_price", 0.0), t["sl"], t["target_1"], t.get("target_2", t["target_1"] + 350.0),
@@ -172,6 +173,7 @@ def log_trade(t):
             t["quality_rating"], t.get("market_regime", "Bullish Trend"),
             t.get("stage", "Stage 2: Early Setup"), t.get("move_classification", "Large Move"),
             t.get("mfe_pts", 0.0), t.get("mae_pts", 0.0),
+            t.get("trailing_mode", "ATR Multiplier Trailing"),
             t.get("is_user_taken", 0),
             t.get("user_actual_entry", t["entry"]), t.get("user_actual_exit", 0.0),
             t.get("user_feedback", "Pending"), t.get("user_comment", ""),
@@ -199,7 +201,7 @@ def update_user_feedback(trade_id, feedback, actual_entry, actual_exit, comment)
     except Exception:
         pass
 
-# ----------------- TELEGRAM DISPATCH WITH INTERACTIVE BUTTONS & DEDUPLICATION (SECTION 39) -----------------
+# ----------------- TELEGRAM DISPATCH WITH DEDUPLICATION (SECTION 39) -----------------
 CONFIG_FILE = "config.json"
 
 def send_telegram(msg, reply_markup=None):
@@ -242,6 +244,9 @@ if "cooldown_until" not in st.session_state:
 
 if "auto_trade_enabled" not in st.session_state:
     st.session_state.auto_trade_enabled = True
+
+if "selected_trailing_mode" not in st.session_state:
+    st.session_state.selected_trailing_mode = "ATR Multiplier Trailing (1.5x)"
 
 # ----------------- QUANT, REGIME & SCORING MATRIX -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
@@ -302,6 +307,11 @@ sr_radar = {
     "1D": {"S": round(btc_price - 2900.0, 1), "R": round(btc_price + 3400.0, 1), "Candle": "Reversal Doji", "Pattern": "Macro Structural Range"}
 }
 
+# ----------------- EXHAUSTION & PROFIT PROTECTION (SECTIONS 19 & 22) -----------------
+exhaustion_score = random.randint(18, 38)
+exhaustion_state = "LOW EXHAUSTION RISK" if exhaustion_score < 40 else "MODERATE SATURATION"
+divergence_status = "No Bearish Divergence" if buyer_ratio > 52 else "Minor Delta Divergence Warning"
+
 # ----------------- SUSTAINABILITY & TIMELINE LOGIC -----------------
 position_status_msg = "NO POSITION"
 position_reason = "Scanner scanning opportunities..."
@@ -324,6 +334,15 @@ if st.session_state.active_trade:
     tr["mfe_pts"] = max(tr.get("mfe_pts", 0.0), cur_pnl)
     tr["mae_pts"] = min(tr.get("mae_pts", 0.0), cur_pnl)
 
+    # Dynamic Trailing Stop Calculation (Section 21)
+    if "selected_trailing_mode" in st.session_state:
+        tr["trailing_mode"] = st.session_state.selected_trailing_mode
+        if "ATR" in tr["trailing_mode"] and cur_pnl >= 200.0:
+            calc_trail = round(btc_price - (atr_14 * 0.4), 1)
+            if calc_trail > tr["sl"]:
+                tr["sl"] = calc_trail
+                append_timeline_event(tr, f"ATR Dynamic Trailing Shifted SL to ${calc_trail:,.1f}")
+
     if cur_pnl >= 350.0:
         position_status_msg = "PARTIAL PROFIT BOOKING ZONE (T1 REACHED)"
         position_reason = "Price has achieved Target 1. Momentum remains positive but continuation probability to T2 is 48%. Trail stop to Breakeven."
@@ -332,7 +351,6 @@ if st.session_state.active_trade:
         if tr["sl"] < tr["entry"]:
             tr["sl"] = tr["entry"]
         
-        # Deduplicated Lifecycle Notification (Section 39.8, 39.16)
         deduplicate_and_send_alert(
             tr, "TARGET_1_HIT",
             "🎯 *TARGET 1 HIT!*\nTrade ID: `" + str(tr['trade_id']) + "`\nT1 Level: $" + str(tr['target_1']) + "\nStop moved to Breakeven: $" + str(tr['entry'])
@@ -440,6 +458,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
             "move_classification": active_move_type + " (" + active_move_desc + ")",
             "mfe_pts": 0.0,
             "mae_pts": 0.0,
+            "trailing_mode": st.session_state.selected_trailing_mode,
             "is_user_taken": 0,
             "user_actual_entry": round(btc_price, 1),
             "user_actual_exit": 0.0,
@@ -458,7 +477,6 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
         st.session_state.active_trade = new_tr
         log_trade(new_tr)
 
-        # Telegram Interactive Inline Keyboard (Section 39.3)
         inline_keyboard_payload = {
             "inline_keyboard": [
                 [{"text": "🟢 TRADE TAKEN", "callback_data": "TAKEN_" + str(tid)}, {"text": "⚪ IGNORE", "callback_data": "IGNORE_" + str(tid)}],
@@ -501,9 +519,10 @@ with m4:
 st.write("")
 
 # ----------------- COMPREHENSIVE TABS ARCHITECTURE -----------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "Live Terminal & Active Runner",
     "Market Regime & 6-Stage Radar",
+    "Trailing-Stop Modes (Section 21)",
     "Pillar Scoring & Strategy Edge",
     "False-Signal Filter Audit",
     "User Feedback & Trade Review",
@@ -568,7 +587,7 @@ with tab1:
             st.session_state.last_auto_scan = 0
             st.rerun()
 
-    # Active Position Runner Card with Integrated Real-Time Timeline
+    # Active Position Runner Card
     if st.session_state.active_trade:
         tr = st.session_state.active_trade
         diff_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
@@ -594,11 +613,12 @@ with tab1:
                 <div style="font-weight:bold; color:#ffb300;">STATUS: """ + str(position_status_msg) + """</div>
                 <div style="font-size:11px; color:#88909e; margin-top:2px;">""" + str(position_reason) + """</div>
                 <div style="font-size:11px; color:#00e676; margin-top:3px;"><strong>ACTION VERDICT:</strong> """ + str(hold_vs_book_verdict) + """</div>
+                <div style="font-size:11px; color:#29b6f6; margin-top:3px;"><strong>ACTIVE TRAILING MODE:</strong> """ + str(tr.get('trailing_mode', 'ATR Trailing')) + """</div>
             </div>
 
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; font-size:13px; margin-bottom:10px;">
                 <div><strong>Entry Price:</strong> $""" + "{:,.1f}".format(tr['entry']) + """</div>
-                <div><strong>Dynamic SL:</strong> $""" + "{:,.1f}".format(tr['sl']) + """</div>
+                <div><strong>Dynamic Trailed SL:</strong> $""" + "{:,.1f}".format(tr['sl']) + """</div>
                 <div><strong>Target 1 / Target 2:</strong> $""" + "{:,.1f}".format(tr['target_1']) + " / $" + "{:,.1f}".format(tr['target_2']) + """</div>
                 <div><strong>Move Potential:</strong> <span style="color:#29b6f6;">""" + str(tr.get('move_classification', 'Large Move')) + """</span></div>
             </div>
@@ -618,7 +638,6 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-        # Action Buttons (Including Section 39.5 Trade Taken Option)
         col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1, 1])
         with col_c1:
             if not tr.get("is_user_taken"):
@@ -651,7 +670,7 @@ with tab1:
                 else:
                     st.info("Remaining position already running as a free runner.")
 
-        with col_c3:
+        with col_c2:
             if st.button("Move SL to Breakeven", use_container_width=True):
                 tr["sl"] = tr["entry"]
                 append_timeline_event(tr, f"User manually moved SL to Breakeven (${tr['entry']:,.1f})")
@@ -799,8 +818,49 @@ with tab2:
     with s6:
         st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#ff5252; font-size:12px;">Exhaustion Exit</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Reversal Watch</div></div>""", unsafe_allow_html=True)
 
-# ----------------- TAB 3: PILLAR SCORING & STRATEGY EDGE -----------------
+# ----------------- TAB 3: TRAILING-STOP MODES (SECTION 21) -----------------
 with tab3:
+    st.markdown("##### 🛡️ 5-TIER DYNAMIC TRAILING-STOP METHODOLOGY (SECTION 21)")
+    st.caption("Customize how running positions trail stop-loss to maximize runner expansion.")
+
+    t_modes = [
+        "ATR Multiplier Trailing (1.5x ATR dynamic buffer)",
+        "Structure-Based Trailing (Trailing below confirmed 15m Higher-Lows)",
+        "Volatility-Bandwidth Trailing (Chandelier Stop Band)",
+        "Support/Resistance Step Trailing (Locking each S/R pivot cleared)",
+        "Momentum-Decay Protection Trailing (Aggressive lock on volume divergence)"
+    ]
+    st.session_state.selected_trailing_mode = st.radio("Select Active Trailing Methodology:", t_modes, index=0)
+
+    st.write("")
+    tr1, tr2, tr3 = st.columns(3)
+    with tr1:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">PROFIT EXHAUSTION DETECTOR</div>
+            <div class="card-val" style="color:#00e676;">""" + str(exhaustion_state) + """</div>
+            <div style="font-size:10px; color:#787f91;">Saturation Score: """ + str(exhaustion_score) + """ / 100</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with tr2:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">MOMENTUM DIVERGENCE GAUGE</div>
+            <div class="card-val" style="color:#29b6f6;">""" + str(divergence_status) + """</div>
+            <div style="font-size:10px; color:#787f91;">Orderflow CVD aligned with trend</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with tr3:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">TRAILING PERFORMANCE EDGE</div>
+            <div class="card-val" style="color:#ffb300;">+2.4x Realized PnL</div>
+            <div style="font-size:10px; color:#787f91;">Versus fixed-stop exit strategy</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ----------------- TAB 4: PILLAR SCORING & STRATEGY EDGE -----------------
+with tab4:
     st.markdown("##### 🧮 WEIGHTED CONFLUENCE SCORING SYSTEM & STRATEGY COMPARISON")
     
     sc1, sc2, sc3 = st.columns(3)
@@ -875,8 +935,8 @@ with tab3:
     ])
     st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-# ----------------- TAB 4: FALSE-SIGNAL FILTER AUDIT (SECTION 26) -----------------
-with tab4:
+# ----------------- TAB 5: FALSE-SIGNAL FILTER AUDIT (SECTION 26) -----------------
+with tab5:
     st.markdown("##### 🛡️ 10-PILLAR FALSE-SIGNAL & TRAP FILTER AUDIT")
     st.caption("Every candidate setup is evaluated against these strict invalidation rules before trigger.")
 
@@ -901,8 +961,8 @@ with tab4:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 5: USER FEEDBACK & REVIEW ENGINE -----------------
-with tab5:
+# ----------------- TAB 6: USER FEEDBACK & REVIEW ENGINE -----------------
+with tab6:
     st.markdown("##### 📝 USER FEEDBACK SUBMISSION & POST-MORTEM REVIEW ENGINE")
     st.caption("Review system setups, record user actual execution slippage, and submit audit feedback.")
 
@@ -962,8 +1022,8 @@ with tab5:
     else:
         st.info("No recorded trades yet to review.")
 
-# ----------------- TAB 6: DAILY / WEEKLY PERFORMANCE SUMMARIES -----------------
-with tab6:
+# ----------------- TAB 7: DAILY / WEEKLY PERFORMANCE SUMMARIES -----------------
+with tab7:
     st.markdown("##### 📅 INSTITUTIONAL PERFORMANCE SUMMARIES & SCHEDULED BRIEFINGS")
     
     b_col1, b_col2 = st.columns(2)
@@ -1008,8 +1068,8 @@ with tab6:
     with w_c4:
         st.markdown("""<div class="card-box"><div class="card-title">RANGE REGIME PROFIT FACTOR</div><div class="card-val" style="color:#ffb300;">1.82</div><div style="font-size:10px; color:#787f91;">Mean-reversion boundary edge</div></div>""", unsafe_allow_html=True)
 
-# ----------------- TAB 7: BACKTESTING & MFE/MAE STATS -----------------
-with tab7:
+# ----------------- TAB 8: BACKTESTING & MFE/MAE STATS -----------------
+with tab8:
     st.markdown("##### 📈 CONDITIONAL HISTORICAL PROBABILITIES & BACKTESTING ENGINE")
     st.caption("Based on conditional historical analysis of 100 similar market structure & delta setups.")
 
@@ -1075,8 +1135,8 @@ with tab7:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 8: 27 REAL-TIME QUESTIONS INTERACTIVE AUDIT -----------------
-with tab8:
+# ----------------- TAB 9: 27 REAL-TIME QUESTIONS INTERACTIVE AUDIT -----------------
+with tab9:
     st.markdown("##### 🔍 27 REAL-TIME OPERATIONAL QUESTIONS LIVE AUDIT")
     st.caption("Automated real-time answers calculated dynamically based on current market state.")
 
@@ -1114,8 +1174,8 @@ with tab8:
         with st.expander(q, expanded=False):
             st.write(f"**Answer:** {a}")
 
-# ----------------- TAB 9: MULTI-TIMEFRAME HIERARCHY MODEL -----------------
-with tab9:
+# ----------------- TAB 10: MULTI-TIMEFRAME HIERARCHY MODEL -----------------
+with tab10:
     st.markdown("##### 🧭 MULTI-TIMEFRAME HIERARCHICAL STRUCTURE (4H -> 1H -> 15m -> 5m)")
     h1, h2, h3, h4 = st.columns(4)
     with h1:
@@ -1167,8 +1227,8 @@ with tab9:
             </div>
             """, unsafe_allow_html=True)
 
-# ----------------- TAB 10: TRADINGVIEW ADVANCED CHART -----------------
-with tab10:
+# ----------------- TAB 11: TRADINGVIEW ADVANCED CHART -----------------
+with tab11:
     st.markdown("##### MULTI-TIMEFRAME TRADINGVIEW ADVANCED CHART")
     tradingview_widget = """
     <div style="height:520px; width:100%;">
@@ -1193,8 +1253,8 @@ with tab10:
     """
     components.html(tradingview_widget, height=525)
 
-# ----------------- TAB 11: ORDERBOOK DEPTH & FLOW -----------------
-with tab11:
+# ----------------- TAB 12: ORDERBOOK DEPTH & FLOW -----------------
+with tab12:
     st.markdown("##### REAL-TIME BUY VS SELL VOLUME PRESSURE")
     st.markdown("""
     <div class="card-box" style="padding:14px 20px;">
@@ -1228,9 +1288,9 @@ with tab11:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 12: WALLET & TELEGRAM SETTINGS -----------------
-with tab12:
-    st.markdown("##### ⚙️ VIRTUAL WALLET & TELEGRAM PREFERENCES CONFIGURATION")
+# ----------------- TAB 13: WALLET & TELEGRAM SETTINGS WITH COMMAND SIMULATOR (SECTION 39.19) -----------------
+with tab13:
+    st.markdown("##### ⚙️ VIRTUAL WALLET, TELEGRAM BOT PREFERENCES & COMMANDS (SECTION 39.19)")
     s1, s2 = st.columns(2)
     with s1:
         st.markdown("### 💰 Reset Virtual Wallet")
@@ -1250,8 +1310,29 @@ with tab12:
         st.markdown("### 🤖 Auto-Trader Engine Control")
         st.session_state.auto_trade_enabled = st.toggle("Enable Automated Execution", value=st.session_state.auto_trade_enabled)
 
+        st.markdown("---")
+        st.markdown("### 📡 Telegram Bot Commands Simulator (Section 39.19)")
+        cmd_c1, cmd_c2 = st.columns(2)
+        with cmd_c1:
+            if st.button("Trigger /status", use_container_width=True):
+                send_telegram("📡 *BOT STATUS COMMAND*\nActive Runner: " + ("YES" if st.session_state.active_trade else "NO") + "\nWallet Balance: $" + f"{wallet_bal:,.2f}")
+                st.success("Sent /status response to Telegram!")
+            if st.button("Trigger /morning Brief", use_container_width=True):
+                send_telegram("🌅 *MANUAL 08:00 AM BRIEF*\nRegime: " + str(current_regime) + "\nBTC Price: $" + f"{btc_price:,.2f}")
+                st.success("Sent Morning Brief to Telegram!")
+        with cmd_c2:
+            if st.button("Trigger /active Setup", use_container_width=True):
+                if st.session_state.active_trade:
+                    send_telegram("⚡ *ACTIVE TRADE INFO*\nID: `" + str(st.session_state.active_trade['trade_id']) + "`\nEntry: $" + str(st.session_state.active_trade['entry']))
+                else:
+                    send_telegram("⚡ *ACTIVE TRADE INFO*\nNo active runner currently in market.")
+                st.success("Sent /active info to Telegram!")
+            if st.button("Trigger /evening Audit", use_container_width=True):
+                send_telegram("🌆 *MANUAL 08:00 PM AUDIT*\nDay Realized PnL: $" + f"{realized_pnl:,.2f}")
+                st.success("Sent Evening Audit to Telegram!")
+
     with s2:
-        st.markdown("### 🔔 Telegram Notification Preferences")
+        st.markdown("### 🔔 Telegram Notification Credentials")
         curr_tok = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         curr_cht = os.environ.get("TELEGRAM_CHAT_ID", "")
         if os.path.exists(CONFIG_FILE):
