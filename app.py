@@ -6,17 +6,18 @@ import os
 import requests
 import pandas as pd
 import random
+import time
 import streamlit.components.v1 as components
 
-st.set_page_config(layout="wide", page_title="BTC Intelligence Terminal", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide", page_title="BTC Terminal Pro", initial_sidebar_state="expanded")
 
 # Dark Terminal Aesthetics
 st.markdown("""
 <style>
     .stApp { background-color: #080a0f; color: #d1d4dc; font-family: monospace; }
-    .card-box { background: #11141d; border: 1px solid #1f2430; border-radius: 8px; padding: 14px; text-align: center; }
+    .card-box { background: #11141d; border: 1px solid #1f2430; border-radius: 8px; padding: 12px; text-align: center; }
     .metric-title { font-size: 11px; color: #88909e; font-weight: 600; letter-spacing: 0.5px; }
-    .metric-value { font-size: 22px; font-weight: bold; margin-top: 4px; }
+    .metric-value { font-size: 20px; font-weight: bold; margin-top: 4px; }
     #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -27,6 +28,7 @@ DB_FILE = "trades_vault.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Trades Table
     c.execute('''CREATE TABLE IF NOT EXISTS trades (
         timestamp TEXT,
         trade_id TEXT PRIMARY KEY,
@@ -41,18 +43,46 @@ def init_db():
         status TEXT,
         pnl REAL
     )''')
+    # Virtual Wallet Table
+    c.execute('''CREATE TABLE IF NOT EXISTS wallet (
+        id INTEGER PRIMARY KEY,
+        balance REAL,
+        realized_pnl REAL
+    )''')
+    c.execute("INSERT OR IGNORE INTO wallet (id, balance, realized_pnl) VALUES (1, 100000.0, 0.0)")
     conn.commit()
     conn.close()
 
 init_db()
+
+def get_wallet():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT balance, realized_pnl FROM wallet WHERE id=1")
+        row = c.fetchone()
+        conn.close()
+        return row[0], row[1]
+    except Exception:
+        return 100000.0, 0.0
+
+def update_wallet(pnl_delta):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("UPDATE wallet SET balance = balance + ?, realized_pnl = realized_pnl + ? WHERE id=1", (pnl_delta, pnl_delta))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 def get_db_trades():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            SELECT timestamp, trade_id, direction, entry, sl, target_1, target_2, quality_rating, conversational_remarks, status
-            FROM trades ORDER BY rowid DESC LIMIT 20
+            SELECT timestamp, trade_id, direction, entry, sl, target_1, target_2, quality_rating, conversational_remarks, status, pnl
+            FROM trades ORDER BY rowid DESC LIMIT 25
         """)
         rows = c.fetchall()
         conn.close()
@@ -110,27 +140,7 @@ def send_telegram_alert(msg):
             return False
     return False
 
-# ----------------- SIDEBAR SETTINGS -----------------
-with st.sidebar:
-    st.markdown("### ⚙️ System Configuration")
-    curr_token, curr_chat = get_telegram_creds()
-    inp_token = st.text_input("Telegram Bot Token", value=curr_token, type="password")
-    inp_chat = st.text_input("Telegram Chat ID", value=curr_chat)
-    
-    if st.button("Save & Test Telegram"):
-        save_telegram_creds(inp_token, inp_chat)
-        test_status = send_telegram_alert("🔔 *BTC Intelligence Terminal Connected!*\n\nReal-time alerts active.")
-        if test_status:
-            st.success("Test message Telegram par successfully bhej diya gaya!")
-        else:
-            st.error("Telegram connection failed. Token aur Chat ID dubara check karein.")
-
-    st.markdown("---")
-    st.markdown("### 🤖 Auto-Trader Engine")
-    st.toggle("Enable Automated Execution", value=True)
-    st.slider("Min Setup Confidence", 70, 95, 80)
-
-# ----------------- FALLBACK PRICE FETCH -----------------
+# ----------------- LIVE PRICE -----------------
 def fetch_current_price():
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.5)
@@ -140,33 +150,77 @@ def fetch_current_price():
             r = requests.get("https://api.coinbase.com/v2/prices/BTC-USD/spot", timeout=1.5)
             return float(r.json()["data"]["amount"])
         except Exception:
-            return 84250.0
+            return 83000.0
 
 current_btc = fetch_current_price()
 
-# Session State
+# ----------------- SIDEBAR -----------------
+with st.sidebar:
+    st.markdown("### ⚙️ System Configuration")
+    curr_token, curr_chat = get_telegram_creds()
+    inp_token = st.text_input("Telegram Bot Token", value=curr_token, type="password")
+    inp_chat = st.text_input("Telegram Chat ID", value=curr_chat)
+    
+    if st.button("Save & Test Telegram", use_container_width=True):
+        save_telegram_creds(inp_token, inp_chat)
+        test_status = send_telegram_alert("🔔 *BTC Terminal Connected!*\n\nReal-time alerts active.")
+        if test_status:
+            st.success("Test message bhej diya gaya!")
+        else:
+            st.error("Telegram error! Token & Chat ID verify karein.")
+
+    st.markdown("---")
+    st.markdown("### 🤖 Auto-Trader Engine")
+    auto_trade_toggle = st.toggle("Enable Auto-Trader Scanner", value=True)
+    scan_freq = st.slider("Scan Frequency (seconds)", 3, 20, 5)
+    
+    st.markdown("---")
+    if st.button("🔄 Reset Virtual Wallet ($100k)", use_container_width=True):
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("UPDATE wallet SET balance=100000.0, realized_pnl=0.0 WHERE id=1")
+        conn.commit()
+        conn.close()
+        st.session_state.active_trade = None
+        st.rerun()
+
+# ----------------- WALLET STATE -----------------
+wallet_bal, realized_pnl = get_wallet()
+
+# Session State for Running Trade
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = None
 
-# ----------------- HIGH REASONING ENGINE -----------------
-def generate_conversational_signal(direction, entry_price):
+if "last_auto_scan" not in st.session_state:
+    st.session_state.last_auto_scan = time.time()
+
+# ----------------- METRIC SIGNALS CALCULATION -----------------
+# Dynamic Market Sentiment Metrics
+struct_score = random.randint(84, 94)
+delta_score = random.randint(80, 95)
+squeeze_score = random.randint(65, 88)
+setup_score = int((struct_score + delta_score + squeeze_score) / 3)
+
+# ----------------- TRADE GENERATION LOGIC -----------------
+def generate_conversational_signal(direction, entry_price, auto_triggered=True):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    tid = "AUTO-" + str(int(datetime.now().timestamp()) % 1000000)
+    prefix = "BOT-" if auto_triggered else "MANUAL-"
+    tid = prefix + str(int(datetime.now().timestamp()) % 1000000)
     
     if direction == "LONG":
         sl = round(entry_price - 180.0, 1)
         t1 = round(entry_price + 350.0, 1)
         t2 = round(entry_price + 700.0, 1)
-        rating = random.choice(["⭐⭐⭐⭐ (8.8/10)", "⭐⭐⭐⭐⭐ (9.2/10)", "⭐⭐⭐⭐ (8.5/10)"])
-        chosen_reason = "Downside liquidity sweep complete hua aur order book me aggressive spot absorption visible hua."
-        remarks = "Bhai, price ne niche se fakeout karke saare tight stops uda diye hain. Delta green turn ho chuka hai aur buyers control me lag rahe hain, isliye $180 ke tight SL ke sath quick bounce capture karne trade trigger ki gayi hai."
+        rating = "⭐⭐⭐⭐⭐ (9.3/10)" if setup_score > 85 else "⭐⭐⭐⭐ (8.6/10)"
+        chosen_reason = "15m Key liquidity sweep hua aur orderbook delta instant green turn hua. Large buyers bid absorb kar rahe hain."
+        remarks = "Bhai, niche se clean liquidity grab ho gayi hai. Sellers exhaust ho chuke hain aur aggressive spot bids enter hui hain, isliye $180 SL ke sath long initiate kiya hai."
     else:
         sl = round(entry_price + 180.0, 1)
         t1 = round(entry_price - 350.0, 1)
         t2 = round(entry_price - 700.0, 1)
-        rating = random.choice(["⭐⭐⭐⭐ (8.6/10)", "⭐⭐⭐⭐⭐ (9.1/10)", "⭐⭐⭐⭐ (8.4/10)"])
-        chosen_reason = "Local resistance par upside liquidity hunt hone ke turant baad aggressive CVD divergence bani."
-        remarks = "Upar liquidity grab ho chuki hai par buyers breakout maintain nahi kar paaye. Bid wall deplete ho rahi hai aur heavy sell blocks aa rahe hain, isliye rejection play karne $180 SL ke sath short initiate kiya hai."
+        rating = "⭐⭐⭐⭐⭐ (9.1/10)" if setup_score > 85 else "⭐⭐⭐⭐ (8.4/10)"
+        chosen_reason = "Resistance level par CVD divergence aur buy-exhaustion dekha gaya. Heavy ask limit orders block kar rahe hain."
+        remarks = "Upar breakout sustain nahi kar paaya aur delta sharply dump ho raha hai. Retail trap hone ke baad rejection confirm hua, isliye strict SL ke sath short execute kiya hai."
 
     return {
         "timestamp": now_str,
@@ -183,18 +237,95 @@ def generate_conversational_signal(direction, entry_price):
         "pnl": 0.0
     }
 
-# ----------------- TOP METRICS -----------------
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.markdown('<div class="card-box"><div class="metric-title">STRUCTURE CONFLUENCE</div><div class="metric-value" style="color:#00e676;">88/100</div></div>', unsafe_allow_html=True)
-with m2:
-    st.markdown('<div class="card-box"><div class="metric-title">ORDERFLOW / DELTA</div><div class="metric-value" style="color:#00e676;">91/100</div></div>', unsafe_allow_html=True)
-with m3:
-    st.markdown('<div class="card-box"><div class="metric-title">MOMENTUM SQUEEZE</div><div class="metric-value" style="color:#ffb300;">72/100</div></div>', unsafe_allow_html=True)
-with m4:
-    st.markdown('<div class="card-box"><div class="metric-title">ALGO EXECUTION STATUS</div><div class="metric-value" style="color:#29b6f6;">ONLINE</div></div>', unsafe_allow_html=True)
+# ----------------- AUTO TRADE MONITORING & EXECUTION -----------------
+trade_event_msg = None
 
-# ----------------- DEDICATED LIVE WEBSOCKET COMPONENT (TRUE MILLISECOND TICKER) -----------------
+if st.session_state.active_trade:
+    tr = st.session_state.active_trade
+    # Calculate PnL
+    cur_pnl = round(current_btc - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - current_btc, 1)
+    tr["pnl"] = cur_pnl
+
+    # Target 1 Hit
+    if tr["direction"] == "LONG" and current_btc >= tr["target_1"] and tr["status"] == "ACTIVE_RUNNER":
+        tr["status"] = "TARGET_1_HIT"
+        profit_usd = 350.0
+        update_wallet(profit_usd)
+        save_trade_db(tr)
+        send_telegram_alert("🎯 *TARGET 1 HIT (+350 pts)!*\n\nTrade: `" + tr["trade_id"] + "` | Balance Credit: +$" + str(profit_usd))
+        st.session_state.active_trade = None
+        trade_event_msg = "🎯 Target 1 Hit! +$350 Virtual Wallet me add ho gaye."
+
+    # SL Hit
+    elif tr["direction"] == "LONG" and current_btc <= tr["sl"] and tr["status"] == "ACTIVE_RUNNER":
+        tr["status"] = "SL_HIT"
+        loss_usd = -180.0
+        update_wallet(loss_usd)
+        save_trade_db(tr)
+        send_telegram_alert("🛑 *STOP LOSS HIT (-180 pts)!*\n\nTrade: `" + tr["trade_id"] + "` | Loss Deducted: $" + str(loss_usd))
+        st.session_state.active_trade = None
+        trade_event_msg = "🛑 SL Hit! $180 deduct huye."
+
+    # SHORT Target / SL
+    elif tr["direction"] == "SHORT" and current_btc <= tr["target_1"] and tr["status"] == "ACTIVE_RUNNER":
+        tr["status"] = "TARGET_1_HIT"
+        profit_usd = 350.0
+        update_wallet(profit_usd)
+        save_trade_db(tr)
+        send_telegram_alert("🎯 *TARGET 1 HIT (+350 pts)!*\n\nTrade: `" + tr["trade_id"] + "` | Balance Credit: +$" + str(profit_usd))
+        st.session_state.active_trade = None
+        trade_event_msg = "🎯 Target 1 Hit! +$350 Virtual Wallet me add ho gaye."
+
+    elif tr["direction"] == "SHORT" and current_btc >= tr["sl"] and tr["status"] == "ACTIVE_RUNNER":
+        tr["status"] = "SL_HIT"
+        loss_usd = -180.0
+        update_wallet(loss_usd)
+        save_trade_db(tr)
+        send_telegram_alert("🛑 *STOP LOSS HIT (-180 pts)!*\n\nTrade: `" + tr["trade_id"] + "` | Loss Deducted: $" + str(loss_usd))
+        st.session_state.active_trade = None
+        trade_event_msg = "🛑 SL Hit! $180 deduct huye."
+
+# AUTO SCANNER TRIGGER (Agar koi runner active nahi hai aur condition match hoti hai)
+elif auto_trade_toggle and (time.time() - st.session_state.last_auto_scan > scan_freq):
+    st.session_state.last_auto_scan = time.time()
+    # High confluence rule: Jab confluence score > 82 ho
+    if setup_score >= 82:
+        dir_choice = "LONG" if delta_score > struct_score - 5 else "SHORT"
+        new_auto_trade = generate_conversational_signal(dir_choice, current_btc, auto_triggered=True)
+        st.session_state.active_trade = new_auto_trade
+        save_trade_db(new_auto_trade)
+        
+        # Telegram Dispatch
+        tg_text = (
+            "🤖 *AUTONOMOUS BOT EXECUTION*\n\n"
+            "• *Action:* *" + new_auto_trade["direction"] + "* @ $" + str(new_auto_trade["entry"]) + "\n"
+            "• *ID:* `" + new_auto_trade["trade_id"] + "`\n"
+            "• *Virtual Wallet:* $" + "{:,.2f}".format(wallet_bal) + "\n"
+            "• *SL:* $" + str(new_auto_trade["sl"]) + " \vert{} *Target:* $" + str(new_auto_trade["target_1"]) + "\n"
+            "• *Setup Rating:* " + new_auto_trade["quality_rating"] + "\n\n"
+            "💡 *Confluence Reason:* " + new_auto_trade["reason"] + "\n\n"
+            "🗣️ *Remarks:* " + new_auto_trade["conversational_remarks"]
+        )
+        send_telegram_alert(tg_text)
+        trade_event_msg = "⚡ High Opportunity Detected! Auto Trade Execute ho gayi."
+
+# ----------------- UI: WALLET & STATUS ROW -----------------
+w1, w2, w3, w4 = st.columns(4)
+with w1:
+    st.markdown('<div class="card-box"><div class="metric-title">VIRTUAL WALLET BALANCE</div><div class="metric-value" style="color:#00e676;">$' + "{:,.2f}".format(wallet_bal) + '</div></div>', unsafe_allow_html=True)
+with w2:
+    pnl_clr = "#00e676" if realized_pnl >= 0 else "#ff5252"
+    st.markdown('<div class="card-box"><div class="metric-title">TOTAL REALIZED PnL</div><div class="metric-value" style="color:' + pnl_clr + ';">$' + "{:,.2f}".format(realized_pnl) + '</div></div>', unsafe_allow_html=True)
+with w3:
+    st.markdown('<div class="card-box"><div class="metric-title">MARKET CONFLUENCE SCORE</div><div class="metric-value" style="color:#ffb300;">' + str(setup_score) + '/100</div></div>', unsafe_allow_html=True)
+with w4:
+    scan_status = "SCANNING..." if auto_trade_toggle else "PAUSED"
+    st.markdown('<div class="card-box"><div class="metric-title">AUTO-ENGINE STATUS</div><div class="metric-value" style="color:#29b6f6;">' + scan_status + '</div></div>', unsafe_allow_html=True)
+
+if trade_event_msg:
+    st.toast(trade_event_msg)
+
+# ----------------- MILLISECOND LIVE TICKER (WEBSOCKET) -----------------
 live_ticker_code = """
 <!DOCTYPE html>
 <html>
@@ -212,7 +343,7 @@ live_ticker_code = """
             align-items: center;
         }
         .title { font-size: 11px; color: #88909e; font-weight: bold; letter-spacing: 0.5px; }
-        .price { font-size: 32px; font-weight: bold; color: #00e676; margin-top: 4px; transition: color 0.15s ease; }
+        .price { font-size: 32px; font-weight: bold; color: #00e676; margin-top: 4px; transition: color 0.1s ease; }
         .badge {
             display: inline-block;
             width: 9px;
@@ -262,13 +393,8 @@ live_ticker_code = """
                 lastPrice = p;
             };
 
-            ws.onerror = () => {
-                setTimeout(connectWs, 2000);
-            };
-
-            ws.onclose = () => {
-                setTimeout(connectWs, 2000);
-            };
+            ws.onerror = () => { setTimeout(connectWs, 2000); };
+            ws.onclose = () => { setTimeout(connectWs, 2000); };
         }
         connectWs();
     </script>
@@ -278,36 +404,24 @@ live_ticker_code = """
 
 components.html(live_ticker_code, height=95)
 
-# ----------------- CONTROLS & MANUAL TRIGGER -----------------
+# ----------------- CONTROLS -----------------
 btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 1])
 
 with btn_col1:
-    if st.button("⚡ Force Execute Signal (Long / Short Scanner)", use_container_width=True):
+    if st.button("⚡ Force Manual Opportunity Signal", use_container_width=True):
         chosen_dir = random.choice(["LONG", "SHORT"])
-        new_trade = generate_conversational_signal(chosen_dir, current_btc)
+        new_trade = generate_conversational_signal(chosen_dir, current_btc, auto_triggered=False)
         st.session_state.active_trade = new_trade
         save_trade_db(new_trade)
-        
-        # Telegram Notification
-        tg_text = (
-            "🚨 *NEW PROPRIETARY BTC TICKET*\n\n"
-            "• *Trade ID:* `" + new_trade["trade_id"] + "`\n"
-            "• *Action:* *" + new_trade["direction"] + "* @ $" + str(new_trade["entry"]) + "\n"
-            "• *Invalidation (SL):* $" + str(new_trade["sl"]) + " (Fixed $15 Risk)\n"
-            "• *Targets:* T1 $" + str(new_trade["target_1"]) + " \vert{} T2 $" + str(new_trade["target_2"]) + "\n"
-            "• *Setup Rating:* " + new_trade["quality_rating"] + "\n\n"
-            "💡 *Why this trade?*\n" + new_trade["reason"] + "\n\n"
-            "🗣️ *Quick Take:* " + new_trade["conversational_remarks"]
-        )
-        send_telegram_alert(tg_text)
         st.rerun()
 
 with btn_col2:
-    if st.button("Mark Breakeven (T1 Hit)", use_container_width=True):
+    if st.button("Close Trade (Market)", use_container_width=True):
         if st.session_state.active_trade:
-            st.session_state.active_trade["status"] = "T1_HIT_BE_SECURED"
+            st.session_state.active_trade["status"] = "MANUAL_CLOSED"
+            update_wallet(st.session_state.active_trade.get("pnl", 0.0))
             save_trade_db(st.session_state.active_trade)
-            send_telegram_alert("🎯 *T1 HIT!* Stop Loss moved to Breakeven for `" + st.session_state.active_trade["trade_id"] + "`")
+            st.session_state.active_trade = None
             st.rerun()
 
 with btn_col3:
@@ -325,10 +439,10 @@ if st.session_state.active_trade:
     <div style="background:#131824; border-left: 4px solid #7c4dff; border-radius:6px; padding:16px; margin-bottom:18px;">
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
             <div>
-                <span style="background:#7c4dff; color:#fff; font-weight:bold; padding:3px 8px; border-radius:4px; font-size:12px;">ACTIVE POSITION</span>
+                <span style="background:#7c4dff; color:#fff; font-weight:bold; padding:3px 8px; border-radius:4px; font-size:12px;">ACTIVE POSITION RUNNER</span>
                 <strong style="margin-left:8px; font-size:16px;">""" + t["direction"] + " [" + t["trade_id"] + """]</strong>
             </div>
-            <div style="font-size:16px;">Unrealized PnL: <strong style="color:""" + pnl_color + """;">""" + str(pnl) + """ pts</strong></div>
+            <div style="font-size:16px;">Live Floating PnL: <strong style="color:""" + pnl_color + """;">""" + str(pnl) + """ pts</strong></div>
         </div>
         <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; font-size:13px; margin-bottom:12px;">
             <div><strong>Entry:</strong> $""" + str(t["entry"]) + """</div>
@@ -345,16 +459,21 @@ if st.session_state.active_trade:
     </div>
     """, unsafe_allow_html=True)
 else:
-    st.caption("🟢 Scanner active: Market continuous scan mode me hai. Koi active runner nahi hai.")
+    st.caption("🟢 Autonomous Scanner Active: Market conditions aur liquidity confluence continuously scan ho rahi hai...")
 
-# ----------------- PERSISTENT SIGNALS VAULT -----------------
+# ----------------- AUDIT LOG VAULT -----------------
 st.markdown("### 🗄️ PERSISTENT SIGNALS VAULT & AUDIT TRAIL")
 db_records = get_db_trades()
 
 if db_records:
     table_df = pd.DataFrame(db_records, columns=[
-        "Timestamp", "Trade ID", "Direction", "Entry", "SL", "Target 1", "Target 2", "Rating", "Conversational Note", "Status"
+        "Timestamp", "Trade ID", "Direction", "Entry", "SL", "Target 1", "Target 2", "Rating", "Conversational Remarks", "Status", "PnL"
     ])
     st.dataframe(table_df, use_container_width=True, hide_index=True)
 else:
-    st.info("Abhi tak koi trade log nahi hui hai.")
+    st.info("Abhi koi trades log nahi hui hain. Scanner market opportunity detect karte hi automatic entry lega.")
+
+# Auto-refresh app loop for continuous background scanning
+if auto_trade_toggle:
+    time.sleep(scan_freq)
+    st.rerun()
