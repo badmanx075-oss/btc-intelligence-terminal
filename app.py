@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
 
-# Custom Dark Trading Theme
+# Custom Dark Styling
 st.markdown("""
 <style>
     .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
@@ -57,12 +57,16 @@ def init_db():
         target_2 REAL,
         target_3 REAL,
         margin_used REAL,
+        booked_partial_pnl REAL,
+        remaining_margin REAL,
         quality_rating TEXT,
         market_regime TEXT,
         stage TEXT,
         move_classification TEXT,
         mfe_pts REAL,
         mae_pts REAL,
+        user_actual_entry REAL,
+        user_actual_exit REAL,
         post_trade_feedback TEXT,
         reason TEXT,
         conversational_remarks TEXT,
@@ -109,10 +113,26 @@ def ledger_close(margin_cost, pnl_usd):
         c.execute("""
             UPDATE wallet 
             SET balance = balance + ? + ?, 
-                locked_margin = 0.0, 
+                locked_margin = max(0.0, locked_margin - ?), 
                 realized_pnl = realized_pnl + ? 
             WHERE id=1
         """, (margin_cost, pnl_usd, margin_cost, pnl_usd))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def ledger_partial_book(released_margin, partial_profit):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            UPDATE wallet 
+            SET balance = balance + ? + ?, 
+                locked_margin = max(0.0, locked_margin - ?), 
+                realized_pnl = realized_pnl + ? 
+            WHERE id=1
+        """, (released_margin, partial_profit, released_margin, partial_profit))
         conn.commit()
         conn.close()
     except Exception:
@@ -123,7 +143,7 @@ def get_first_tab_ledger():
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            SELECT timestamp, trade_id, direction, entry, exit_price, sl, target_1, market_regime, move_classification, quality_rating, post_trade_feedback, status, pnl
+            SELECT timestamp, trade_id, direction, entry, exit_price, sl, target_1, market_regime, move_classification, booked_partial_pnl, quality_rating, post_trade_feedback, status, pnl
             FROM trades ORDER BY rowid DESC LIMIT 25
         """)
         rows = c.fetchall()
@@ -137,14 +157,16 @@ def log_trade(t):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             t["timestamp"], t["trade_id"], t["direction"], t["entry"],
             t.get("exit_price", 0.0), t["sl"], t["target_1"], t.get("target_2", t["target_1"] + 350.0),
             t.get("target_3", t["target_1"] + 800.0), t.get("margin_used", 2500.0),
+            t.get("booked_partial_pnl", 0.0), t.get("remaining_margin", 2500.0),
             t["quality_rating"], t.get("market_regime", "Bullish Trend"),
             t.get("stage", "Stage 2: Early Setup"), t.get("move_classification", "Large Move"),
             t.get("mfe_pts", 0.0), t.get("mae_pts", 0.0),
+            t.get("user_actual_entry", t["entry"]), t.get("user_actual_exit", 0.0),
             t.get("post_trade_feedback", "Running Position"),
             t["reason"], t["conversational_remarks"], t["status"], t.get("pnl", 0.0)
         ))
@@ -168,7 +190,7 @@ def send_telegram(msg):
             pass
     if token and chat_id:
         try:
-            url = "https://api.telegram.org/bot" + token + "/sendMessage"
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
             requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=2.5)
         except Exception:
             pass
@@ -186,7 +208,7 @@ if "cooldown_until" not in st.session_state:
 if "auto_trade_enabled" not in st.session_state:
     st.session_state.auto_trade_enabled = True
 
-# ----------------- QUANT, REGIME & POINT-MOVE STATS ENGINE -----------------
+# ----------------- QUANT, REGIME & POINT-MOVE ENGINE -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
@@ -208,13 +230,11 @@ move_classes = [
 ]
 active_move_type, active_move_desc, move_mult = move_classes[2]
 
-# Granular Entry Zones (Section 14)
 early_entry_zone = "$" + "{:,.1f}".format(btc_price - 40.0) + " - $" + "{:,.1f}".format(btc_price + 20.0)
 confirmation_entry = "Above $" + "{:,.1f}".format(btc_price + 85.0)
 retest_entry_zone = "$" + "{:,.1f}".format(btc_price - 80.0) + " - $" + "{:,.1f}".format(btc_price - 50.0)
 avoid_late_zone = "Above $" + "{:,.1f}".format(btc_price + 280.0)
 
-# Stop-Loss Granularity (Section 15)
 hard_invalidation = round(btc_price - (atr_14 * 0.55), 1)
 preferred_sl = round(btc_price - (atr_14 * 0.42), 1)
 emergency_risk = round(btc_price - (atr_14 * 0.85), 1)
@@ -231,7 +251,7 @@ sr_radar = {
     "1D": {"S": round(btc_price - 2900.0, 1), "R": round(btc_price + 3400.0, 1), "Candle": "Reversal Doji", "Pattern": "Macro Structural Range"}
 }
 
-# ----------------- SUSTAINABILITY & HOLD VS PROFIT DECISION ENGINE (SECTIONS 18, 19, 23) -----------------
+# ----------------- SUSTAINABILITY & PARTIAL PROFIT ENGINE -----------------
 position_status_msg = "NO POSITION"
 position_reason = "Scanner scanning opportunities..."
 hold_vs_book_verdict = "N/A - Waiting for Setup"
@@ -242,13 +262,12 @@ if st.session_state.active_trade:
     cur_pnl = round(raw_points, 1)
     tr["pnl"] = cur_pnl
 
-    # MFE / MAE Tracking
     tr["mfe_pts"] = max(tr.get("mfe_pts", 0.0), cur_pnl)
     tr["mae_pts"] = min(tr.get("mae_pts", 0.0), cur_pnl)
 
     # Dynamic Post-Entry Sustainability & Decision Matrix
     if cur_pnl >= 350.0:
-        position_status_msg = "PARTIAL PROFIT BOOKING ZONE (T1 ACHIEVED)"
+        position_status_msg = "PARTIAL PROFIT BOOKING ZONE (T1 REACHED)"
         position_reason = "Price has achieved Target 1. Momentum remains positive but continuation probability to T2 is 48%. Trail stop to Breakeven."
         hold_vs_book_verdict = "Book 25-30% partial profit now. Trail remaining 70% stop to Breakeven ($" + "{:,.1f}".format(tr['entry']) + ") for Target 2."
         if tr["sl"] < tr["entry"]:
@@ -266,28 +285,30 @@ if st.session_state.active_trade:
         position_reason = "Early setup maturing. Absorption defending entry level."
         hold_vs_book_verdict = "Hold position. Thesis intact. Let trade develop."
 
-    # Target 1 Hit Auto Close
-    if (tr["direction"] == "LONG" and btc_price >= tr["target_1"]) or (tr["direction"] == "SHORT" and btc_price <= tr["target_1"]):
-        tr["status"] = "CLOSED (TARGET 1 HIT)"
+    # Target 2 Hit (Final Target)
+    if (tr["direction"] == "LONG" and btc_price >= tr["target_2"]) or (tr["direction"] == "SHORT" and btc_price <= tr["target_2"]):
+        tr["status"] = "CLOSED (TARGET 2 HIT)"
         tr["exit_price"] = btc_price
-        profit = 700.0
-        tr["post_trade_feedback"] = "Target 1 Hit: Smooth liquidity run (+350 pts). Risk/Reward 1:2 achieved."
-        ledger_close(tr["margin_used"], profit)
+        rem_margin = tr.get("remaining_margin", 2500.0)
+        final_profit = round(rem_margin * 0.45, 2)
+        tr["post_trade_feedback"] = "Target 2 Full Hit (+750 pts). Extended Move Runner captured."
+        ledger_close(rem_margin, final_profit)
         log_trade(tr)
-        send_telegram("Target 1 Hit! Trade `" + str(tr['trade_id']) + "` closed. Profit: +$" + str(profit))
+        send_telegram("🎯 *TARGET 2 HIT!* Trade `" + str(tr['trade_id']) + "` fully closed. Profit: +$" + str(final_profit))
         st.session_state.active_trade = None
-        st.session_state.cooldown_until = time.time() + 15
+        st.session_state.cooldown_until = time.time() + 20
         st.rerun()
 
     # SL Hit Auto Close
     elif (tr["direction"] == "LONG" and btc_price <= tr["sl"]) or (tr["direction"] == "SHORT" and btc_price >= tr["sl"]):
         tr["status"] = "CLOSED (SL HIT)"
         tr["exit_price"] = btc_price
-        loss = -360.0
-        tr["post_trade_feedback"] = "SL Invalidation: Opposite delta push (-180 pts). Capital protected."
-        ledger_close(tr["margin_used"], loss)
+        rem_margin = tr.get("remaining_margin", 2500.0)
+        loss = -360.0 if tr["sl"] != tr["entry"] else 0.0
+        tr["post_trade_feedback"] = "SL Triggered: Position exited. Capital preserved."
+        ledger_close(rem_margin, loss)
         log_trade(tr)
-        send_telegram("SL Hit! Trade `" + str(tr['trade_id']) + "` closed. Loss: $" + str(loss))
+        send_telegram("🛑 *SL HIT!* Trade `" + str(tr['trade_id']) + "` closed. Loss: $" + str(loss))
         st.session_state.active_trade = None
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
@@ -323,12 +344,16 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
             "target_2": t2_calc,
             "target_3": t3_calc,
             "margin_used": margin,
+            "remaining_margin": margin,
+            "booked_partial_pnl": 0.0,
             "quality_rating": "5 Stars (9.6/10)",
             "market_regime": current_regime,
             "stage": "Stage 2: Early Setup Trigger",
             "move_classification": active_move_type + " (" + active_move_desc + ")",
             "mfe_pts": 0.0,
             "mae_pts": 0.0,
+            "user_actual_entry": round(btc_price, 1),
+            "user_actual_exit": 0.0,
             "post_trade_feedback": "Active in Market",
             "reason": "Early Accumulation/Absorption + Trap Confirmation (" + str(trap_detector) + ")",
             "conversational_remarks": remarks,
@@ -366,11 +391,12 @@ with m4:
 st.write("")
 
 # ----------------- COMPREHENSIVE TABS ARCHITECTURE -----------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "Live Terminal & Active Runner (All-in-One)",
-    "Market Regime & 6-Stage Opportunity Radar",
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "Live Terminal & Active Runner",
+    "Market Regime & 6-Stage Radar",
     "Backtesting & MFE/MAE Probabilities",
-    "27 Real-Time Questions Interactive Audit",
+    "27 Real-Time Questions Live Audit",
+    "Multi-Timeframe Hierarchy Model",
     "Multi-Timeframe TradingView Chart",
     "Orderbook Depth & Smart Money Flow",
     "Wallet & Telegram Settings"
@@ -442,12 +468,12 @@ with tab1:
                 <div>
                     <span class="status-badge" style="background:#00e676; color:#000;">POSITION OPEN</span>
                     <strong style="margin-left:8px; font-size:16px;">""" + str(tr['direction']) + " [" + str(tr['trade_id']) + """]</strong>
-                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: $""" + "{:,.2f}".format(tr['margin_used']) + """</span>
+                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: $""" + "{:,.2f}".format(tr.get('remaining_margin', 2500.0)) + """</span>
+                    <span style="color:#29b6f6; margin-left:8px; font-size:12px;">Booked Partial: $""" + "{:,.2f}".format(tr.get('booked_partial_pnl', 0.0)) + """</span>
                 </div>
                 <div>Live Floating PnL: <strong id="liveFloatingPoints" style="color:""" + pnl_clr + """; font-size:19px;">""" + pnl_sign + "{:,.1f}".format(diff_points) + " pts (" + pnl_sign + "$" + "{:,.2f}".format(usd_val) + """)</strong></div>
             </div>
             
-            <!-- Position Sustainability Banner -->
             <div style="background:#0a0e17; border:1px solid #1c2438; border-radius:4px; padding:8px 12px; margin-bottom:10px; font-size:13px;">
                 <div style="font-weight:bold; color:#ffb300;">STATUS: """ + str(position_status_msg) + """</div>
                 <div style="font-size:11px; color:#88909e; margin-top:2px;">""" + str(position_reason) + """</div>
@@ -469,25 +495,45 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-        col_c1, col_c2 = st.columns([2, 1])
+        # 3-Tier Multi-Profit Execution Buttons
+        col_c1, col_c2, col_c3 = st.columns([1, 1, 1])
         with col_c1:
-            if st.button("Close Position (Market) & Settle Wallet", use_container_width=True):
+            if st.button("🎯 Book 30% Partial Profit", use_container_width=True):
+                cur_rem = tr.get("remaining_margin", 2500.0)
+                if cur_rem > 1000.0:
+                    release_m = round(cur_rem * 0.30, 2)
+                    partial_pnl = round(diff_points * 0.6, 2)
+                    tr["remaining_margin"] = cur_rem - release_m
+                    tr["booked_partial_pnl"] = tr.get("booked_partial_pnl", 0.0) + partial_pnl
+                    tr["sl"] = tr["entry"]  # Auto-shift to Breakeven
+                    ledger_partial_book(release_m, partial_pnl)
+                    log_trade(tr)
+                    st.success("30% Partial Profit (+$" + str(partial_pnl) + ") booked! SL moved to Breakeven.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.info("Remaining position already running as a free runner.")
+
+        with col_c2:
+            if st.button("Move SL to Breakeven", use_container_width=True):
+                tr["sl"] = tr["entry"]
+                log_trade(tr)
+                st.info("Stop-Loss shifted to Breakeven ($" + "{:,.1f}".format(tr['entry']) + ").")
+
+        with col_c3:
+            if st.button("Close Remaining Position (Market)", use_container_width=True):
                 tr["status"] = "MANUAL_CLOSED"
                 tr["exit_price"] = btc_price
                 settle_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
                 settle_usd = round(settle_points * 2.0, 2)
                 tr["post_trade_feedback"] = "Manual Close @ $" + "{:,.1f}".format(btc_price) + ": Realized " + "{:+.1f}".format(settle_points) + " pts ($" + "{:+.2f}".format(settle_usd) + ")."
-                ledger_close(tr["margin_used"], settle_usd)
+                ledger_close(tr.get("remaining_margin", 2500.0), settle_usd)
                 log_trade(tr)
                 st.session_state.active_trade = None
                 st.session_state.cooldown_until = time.time() + 25
-                st.success("Position Closed! Margin released and $" + "{:,.2f}".format(settle_usd) + " settled into wallet.")
+                st.success("Trade Fully Closed! Wallet updated.")
                 time.sleep(1)
                 st.rerun()
-        with col_c2:
-            if st.button("Move SL to Breakeven", use_container_width=True):
-                tr["sl"] = tr["entry"]
-                st.info("SL moved to Breakeven ($" + "{:,.1f}".format(tr['entry']) + ").")
     else:
         st.markdown("""
         <div style="background:#0f131c; border: 1px dashed #2a3447; border-radius:6px; padding:18px; text-align:center; margin-top:8px;">
@@ -503,7 +549,7 @@ with tab1:
 
     if vault_rows:
         df_sheet = pd.DataFrame(vault_rows, columns=[
-            "Timestamp", "Trade ID", "Direction", "Entry", "Exit Price", "SL", "Target 1", "Market Regime", "Move Potential", "Rating", "Post-Trade Review", "Status", "PnL"
+            "Timestamp", "Trade ID", "Direction", "Entry", "Exit Price", "SL", "Target 1", "Market Regime", "Move Potential", "Partial Booked", "Rating", "Post-Trade Review", "Status", "PnL"
         ])
         csv_data = df_sheet.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -520,7 +566,6 @@ with tab1:
 with tab2:
     st.markdown("##### 🧭 MARKET REGIME, 6-STAGE ENGINE & POINT-MOVE CLASSIFIER")
     
-    # Market Regime Banner
     st.markdown("""
     <div class="card-box" style="border-left: 4px solid #29b6f6; margin-bottom: 12px;">
         <div style="display:flex; justify-content:space-between;">
@@ -537,7 +582,6 @@ with tab2:
     </div>
     """, unsafe_allow_html=True)
 
-    # Granular Entry & Stop Invalidation Zones (Sections 14 & 15)
     st.markdown("###### 🎯 Granular Entry & Invalidation Zones")
     z1, z2, z3, z4 = st.columns(4)
     with z1:
@@ -574,7 +618,6 @@ with tab2:
         """, unsafe_allow_html=True)
 
     st.write("")
-    # Invalidation Methodology
     sl1, sl2, sl3 = st.columns(3)
     with sl1:
         st.markdown("""
@@ -602,7 +645,6 @@ with tab2:
         """, unsafe_allow_html=True)
 
     st.write("")
-    # 6-Stage Lifecycle Breakdown
     st.markdown("###### 📊 6-Stage Lifecycle State Model")
     s1, s2, s3, s4, s5, s6 = st.columns(6)
     with s1:
@@ -623,7 +665,6 @@ with tab3:
     st.markdown("##### 📈 CONDITIONAL HISTORICAL PROBABILITIES & BACKTESTING ENGINE")
     st.caption("Based on conditional historical analysis of 100 similar market structure & delta setups.")
 
-    # 100 Setups Sampling Table
     p1, p2, p3, p4 = st.columns(4)
     with p1:
         st.markdown("""
@@ -725,8 +766,61 @@ with tab4:
         with st.expander(q, expanded=False):
             st.write(f"**Answer:** {a}")
 
-# ----------------- TAB 5: TRADINGVIEW ADVANCED CHART -----------------
+# ----------------- TAB 5: MULTI-TIMEFRAME HIERARCHY MODEL (SECTION 27) -----------------
 with tab5:
+    st.markdown("##### 🧭 MULTI-TIMEFRAME HIERARCHICAL STRUCTURE (4H -> 1H -> 15m -> 5m)")
+    h1, h2, h3, h4 = st.columns(4)
+    with h1:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">4H MACRO REGIME</div>
+            <div style="font-size:15px; font-weight:bold; color:#00e676; margin-top:4px;">BULLISH EXPANSION</div>
+            <div style="font-size:11px; color:#88909e; margin-top:2px;">Trend filter: Long bias favored. Major Liquidity pool: $86,400.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with h2:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">1H STRUCTURAL CONTEXT</div>
+            <div style="font-size:15px; font-weight:bold; color:#29b6f6; margin-top:4px;">HIGHER-LOW FORMATION</div>
+            <div style="font-size:11px; color:#88909e; margin-top:2px;">Range defense: 1h swing support defended successfully.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with h3:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">15m SETUP CONFIRMATION</div>
+            <div style="font-size:15px; font-weight:bold; color:#ffb300; margin-top:4px;">FVG MITIGATION COMPLETE</div>
+            <div style="font-size:11px; color:#88909e; margin-top:2px;">Setup active: Bull flag breakout with CVD absorption.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with h4:
+        st.markdown("""
+        <div class="card-box">
+            <div class="card-title">5m MICRO ENTRY REFINEMENT</div>
+            <div style="font-size:15px; font-weight:bold; color:#00e676; margin-top:4px;">WICK SWEEP REJECTION</div>
+            <div style="font-size:11px; color:#88909e; margin-top:2px;">Trigger point: Pin bar formed at micro support.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("###### Multi-Timeframe Levels Breakdown")
+    sr_cols = st.columns(6)
+    for col, (tf, lv) in zip(sr_cols, sr_radar.items()):
+        with col:
+            st.markdown("""
+            <div class="card-box" style="padding:10px; text-align:center;">
+                <div style="font-size:13px; font-weight:bold; color:#29b6f6;">""" + str(tf) + """ FRAME</div>
+                <div style="font-size:11px; color:#ff5252; margin-top:3px;">Res: $""" + "{:,.1f}".format(lv['R']) + """</div>
+                <div style="font-size:11px; color:#00e676;">Sup: $""" + "{:,.1f}".format(lv['S']) + """</div>
+                <hr style="border:0; border-top:1px solid #1c2230; margin:6px 0;">
+                <div style="font-size:10px; color:#ffb300; font-weight:bold;">""" + str(lv['Pattern']) + """</div>
+                <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: """ + str(lv['Candle']) + """</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ----------------- TAB 6: TRADINGVIEW ADVANCED CHART -----------------
+with tab6:
     st.markdown("##### MULTI-TIMEFRAME TRADINGVIEW ADVANCED CHART")
     tradingview_widget = """
     <div style="height:520px; width:100%;">
@@ -751,8 +845,8 @@ with tab5:
     """
     components.html(tradingview_widget, height=525)
 
-# ----------------- TAB 6: ORDERBOOK DEPTH & FLOW -----------------
-with tab6:
+# ----------------- TAB 7: ORDERBOOK DEPTH & FLOW -----------------
+with tab7:
     st.markdown("##### REAL-TIME BUY VS SELL VOLUME PRESSURE")
     st.markdown("""
     <div class="card-box" style="padding:14px 20px;">
@@ -786,8 +880,8 @@ with tab6:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 7: WALLET & TELEGRAM SETTINGS -----------------
-with tab7:
+# ----------------- TAB 8: WALLET & TELEGRAM SETTINGS -----------------
+with tab8:
     st.markdown("##### VIRTUAL WALLET & CONFIGURATION")
     s1, s2 = st.columns(2)
     with s1:
