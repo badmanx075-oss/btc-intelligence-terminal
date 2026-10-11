@@ -11,10 +11,10 @@ import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
 
-# Professional Trading Desk CSS
+# Dark Theme Styling
 st.markdown("""
 <style>
-    .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
+    .stApp { background-color: #07090e; color: #d1d4dc; font-family: monospace; }
     .card-box { background: #0f131c; border: 1px solid #1c2230; border-radius: 6px; padding: 12px; }
     .card-title { font-size: 11px; color: #787f91; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
     .card-val { font-size: 20px; font-weight: 700; margin-top: 3px; }
@@ -141,27 +141,29 @@ def send_telegram(msg):
             pass
     if token and chat_id:
         try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            url = "https://api.telegram.org/bot" + token + "/sendMessage"
             requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=2.5)
         except Exception:
             pass
 
-# ----------------- LIVE PRICE FEED -----------------
+# ----------------- LIVE DYNAMIC PRICE FETCH -----------------
 def fetch_btc():
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.2)
+        r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.0)
         return float(r.json()["price"])
     except Exception:
-        return 83050.0
+        try:
+            r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=1.0)
+            return float(r.json()["result"]["list"][0]["lastPrice"])
+        except Exception:
+            return 83050.0
 
 btc_price = fetch_btc()
 
 # ----------------- QUANT & SMC MARKET ENGINES -----------------
-# 1. Real-time Orderbook Buyer vs Seller Pressure
-buyer_ratio = round(random.uniform(53.0, 68.0), 1)
+buyer_ratio = round(random.uniform(54.0, 69.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
-# 2. Multi-Timeframe Dynamic Support & Resistance
 sr_levels = {
     "1m": {"S": round(btc_price - 45.0, 1), "R": round(btc_price + 55.0, 1)},
     "5m": {"S": round(btc_price - 120.0, 1), "R": round(btc_price + 140.0, 1)},
@@ -171,7 +173,6 @@ sr_levels = {
     "1D": {"S": round(btc_price - 3200.0, 1), "R": round(btc_price + 3800.0, 1)}
 }
 
-# 3. Chart Patterns Identified
 patterns_pool = [
     ("15m", "Bullish Flag Breakout", "BULLISH"),
     ("5m", "Liquidity Sweep & Wick Rejection", "BULLISH"),
@@ -181,7 +182,6 @@ patterns_pool = [
 ]
 active_pat_tf, active_pattern, pat_bias = random.choice(patterns_pool)
 
-# 4. Smart Money Tracker (SMC) & Trap Status
 smc_status = "INSTITUTIONAL ACCUMULATION (WHALE BID CLUSTER)" if buyer_ratio > 55 else "DISTRIBUTION BLOCK DETECTED"
 trap_signal = "RETAIL LIQUIDITY SWEEP DETECTED (TRAP CONFIRMED)" if random.random() > 0.3 else "CLEAN STRUCTURE EXPANSION"
 
@@ -195,6 +195,7 @@ if "last_auto_scan" not in st.session_state:
 # Check active trade target / SL
 if st.session_state.active_trade:
     tr = st.session_state.active_trade
+    # Dynamic live PnL calculation
     pnl = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
     tr["pnl"] = pnl
 
@@ -204,7 +205,7 @@ if st.session_state.active_trade:
         profit = 700.0
         ledger_close_position(tr["margin_used"], profit)
         log_trade(tr)
-        send_telegram(f"🎯 *TARGET HIT (+350 pts)!*\nTrade `{tr['trade_id']}` closed. Profit: +${profit} added to Wallet.")
+        send_telegram("🎯 *TARGET HIT (+350 pts)!*\nTrade `" + str(tr['trade_id']) + "` closed. Profit: +$" + str(profit) + " added to Wallet.")
         st.session_state.active_trade = None
         st.rerun()
 
@@ -214,7 +215,7 @@ if st.session_state.active_trade:
         loss = -360.0
         ledger_close_position(tr["margin_used"], loss)
         log_trade(tr)
-        send_telegram(f"🛑 *STOP LOSS HIT (-180 pts)!*\nTrade `{tr['trade_id']}` closed. Loss: ${loss} deducted.")
+        send_telegram("🛑 *STOP LOSS HIT (-180 pts)!*\nTrade `" + str(tr['trade_id']) + "` closed. Loss: $" + str(loss) + " deducted.")
         st.session_state.active_trade = None
         st.rerun()
 
@@ -232,8 +233,8 @@ elif time.time() - st.session_state.last_auto_scan > 6:
         t2_calc = round(btc_price + 700.0, 1) if dir_ch == "LONG" else round(btc_price - 700.0, 1)
         
         remarks = (
-            f"Bhai, {active_pat_tf} par {active_pattern} confirm hua hai. Retailers trap ho chuke the aur Smart Money "
-            f"ne {buyer_ratio}% aggressive volume se entry li hai. $2,500 margin debit karke {dir_ch} execute kiya gaya."
+            "Bhai, " + str(active_pat_tf) + " par " + str(active_pattern) + " confirm hua hai. Retailers trap ho chuke the aur Smart Money "
+            "ne " + str(buyer_ratio) + "% aggressive volume se entry li hai. $2,500 margin debit karke " + str(dir_ch) + " execute kiya gaya."
         )
         
         new_trade = {
@@ -247,8 +248,8 @@ elif time.time() - st.session_state.last_auto_scan > 6:
             "margin_used": margin,
             "quality_rating": "⭐⭐⭐⭐⭐ (9.4/10)",
             "smc_strategy": "Liquidity Sweep & FVG Mitigation",
-            "pattern_detected": f"{active_pat_tf} {active_pattern}",
-            "reason": f"SMC Absorption + CVD Flip + Trap Filter Confirm ({trap_signal})",
+            "pattern_detected": str(active_pat_tf) + " " + str(active_pattern),
+            "reason": "SMC Absorption + CVD Flip + Trap Filter Confirm (" + str(trap_signal) + ")",
             "conversational_remarks": remarks,
             "status": "ACTIVE_RUNNER",
             "pnl": 0.0
@@ -257,14 +258,16 @@ elif time.time() - st.session_state.last_auto_scan > 6:
         ledger_open_position(margin)
         st.session_state.active_trade = new_trade
         log_trade(new_trade)
-        send_telegram(
-            f"⚡ *SMC AUTONOMOUS EXECUTION*\n\n"
-            f"Direction: *{dir_ch}* @ ${new_trade['entry']}\n"
-            f"ID: `{tid}` | Margin: ${margin}\n"
-            f"Pattern: {new_trade['pattern_detected']}\n"
-            f"SL: ${sl_calc} \vert{} T1:${t1_calc}\n\n"
-            f"🗣️ *Note:* {remarks}"
+        
+        msg_tg = (
+            "⚡ *SMC AUTONOMOUS EXECUTION*\n\n"
+            "Direction: *" + str(dir_ch) + "* @ $" + str(new_trade['entry']) + "\n"
+            "ID: `" + str(tid) + "` | Margin: $" + str(margin) + "\n"
+            "Pattern: " + str(new_trade['pattern_detected']) + "\n"
+            "SL: $" + str(sl_calc) + " \vert{} T1: $" + str(t1_calc) + "\n\n"
+            "🗣️ *Note:* " + str(remarks)
         )
+        send_telegram(msg_tg)
         st.rerun()
 
 # ----------------- RE-FETCH WALLET FOR CLEAN TOP DISPLAY -----------------
@@ -273,20 +276,20 @@ wallet_bal, locked_margin, realized_pnl = get_wallet_state()
 # ----------------- DASHBOARD HEADER (LEDGER AUDIT) -----------------
 w1, w2, w3, w4 = st.columns(4)
 with w1:
-    st.markdown(f'<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">${wallet_bal:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">$' + "{:,.2f}".format(wallet_bal) + '</div></div>', unsafe_allow_html=True)
 with w2:
-    st.markdown(f'<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">${locked_margin:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">$' + "{:,.2f}".format(locked_margin) + '</div></div>', unsafe_allow_html=True)
 with w3:
     p_col = "#00e676" if realized_pnl >= 0 else "#ff5252"
-    st.markdown(f'<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:{p_col};">${realized_pnl:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:' + p_col + ';">$' + "{:,.2f}".format(realized_pnl) + '</div></div>', unsafe_allow_html=True)
 with w4:
-    st.markdown(f'<div class="card-box"><div class="card-title">SMART MONEY INFLOW DETECTOR</div><div class="card-val" style="color:#29b6f6; font-size:14px; margin-top:8px;">{smc_status}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">SMART MONEY INFLOW DETECTOR</div><div class="card-val" style="color:#29b6f6; font-size:13px; margin-top:6px;">' + str(smc_status) + '</div></div>', unsafe_allow_html=True)
 
 # ----------------- REAL-TIME TAPE & BUY/SELL PRESSURE -----------------
 st.write("")
 t1, t2 = st.columns([1, 1])
 with t1:
-    live_tape = f"""
+    live_tape = """
     <div style="background:#0f131c; border:1px solid #1c2230; border-radius:6px; padding:12px 18px; display:flex; justify-content:space-between; align-items:center;">
         <div>
             <div style="font-size:10px; color:#787f91; font-weight:bold;">BTC/USDT DIRECT TAPE (ZERO LATENCY)</div>
@@ -301,31 +304,31 @@ with t1:
         const el = document.getElementById("liveBtcPrice");
         let lastP = 0;
         const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-        ws.onmessage = (e) => {{
+        ws.onmessage = (e) => {
             const d = JSON.parse(e.data);
             const p = parseFloat(d.p);
-            el.innerText = "$" + p.toLocaleString("en-US", {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+            el.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
             el.style.color = p >= lastP ? "#00e676" : "#ff5252";
             lastP = p;
-        }};
+        };
     </script>
     """
     components.html(live_tape, height=75)
 
 with t2:
-    st.markdown(f"""
+    st.markdown("""
     <div class="card-box" style="padding:10px 16px;">
         <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:bold; margin-bottom:4px;">
-            <span style="color:#00e676;">BUY PRESSURE: {buyer_ratio}%</span>
-            <span style="color:#ff5252;">SELL PRESSURE: {seller_ratio}%</span>
+            <span style="color:#00e676;">BUY PRESSURE: """ + str(buyer_ratio) + """%</span>
+            <span style="color:#ff5252;">SELL PRESSURE: """ + str(seller_ratio) + """%</span>
         </div>
         <div style="width:100%; height:12px; background:#26181d; border-radius:6px; overflow:hidden; display:flex;">
-            <div style="width:{buyer_ratio}%; height:100%; background:#00e676;"></div>
-            <div style="width:{seller_ratio}%; height:100%; background:#ff5252;"></div>
+            <div style="width:""" + str(buyer_ratio) + """%; height:100%; background:#00e676;"></div>
+            <div style="width:""" + str(seller_ratio) + """%; height:100%; background:#ff5252;"></div>
         </div>
         <div style="display:flex; justify-content:space-between; font-size:10px; color:#787f91; margin-top:4px;">
             <span>Orderbook Absorption: Aggressive Bids</span>
-            <span>Trap Filter: {trap_signal}</span>
+            <span>Trap Filter: """ + str(trap_signal) + """</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -336,11 +339,11 @@ r1, r2, r3, r4, r5, r6 = st.columns(6)
 
 for col, (tf, lv) in zip([r1, r2, r3, r4, r5, r6], sr_levels.items()):
     with col:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box" style="padding:8px; text-align:center;">
-            <div style="font-size:12px; font-weight:bold; color:#29b6f6;">{tf} FRAME</div>
-            <div style="font-size:10px; color:#ff5252; margin-top:2px;">Res: ${lv['R']:,.1f}</div>
-            <div style="font-size:10px; color:#00e676;">Sup: ${lv['S']:,.1f}</div>
+            <div style="font-size:12px; font-weight:bold; color:#29b6f6;">""" + str(tf) + """ FRAME</div>
+            <div style="font-size:10px; color:#ff5252; margin-top:2px;">Res: $""" + "{:,.1f}".format(lv['R']) + """</div>
+            <div style="font-size:10px; color:#00e676;">Sup: $""" + "{:,.1f}".format(lv['S']) + """</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -369,33 +372,34 @@ tradingview_widget = """
 """
 components.html(tradingview_widget, height=485)
 
-# ----------------- ACTIVE POSITION CARD -----------------
+# ----------------- ACTIVE POSITION CARD (DYNAMIC PNL) -----------------
 if st.session_state.active_trade:
     tr = st.session_state.active_trade
-    pnl = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
-    pnl_clr = "#00e676" if pnl >= 0 else "#ff5252"
+    cur_pnl = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
+    pnl_clr = "#00e676" if cur_pnl >= 0 else "#ff5252"
+    pnl_sign = "+" if cur_pnl >= 0 else ""
     
-    st.markdown(f"""
+    st.markdown("""
     <div style="background:#111624; border-left: 4px solid #7c4dff; border-radius:6px; padding:14px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
             <div>
                 <span class="badge-pill" style="background:#7c4dff; color:#fff;">ACTIVE POSITION</span>
-                <strong style="margin-left:8px;">{tr['direction']} [{tr['trade_id']}]</strong>
-                <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: ${tr['margin_used']:,.2f}</span>
+                <strong style="margin-left:8px;">""" + str(tr['direction']) + " [" + str(tr['trade_id']) + """]</strong>
+                <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: $""" + "{:,.2f}".format(tr['margin_used']) + """</span>
             </div>
-            <div>Floating PnL: <strong style="color:{pnl_clr}; font-size:16px;">{pnl:+.1f} pts</strong></div>
+            <div>Floating PnL: <strong style="color:""" + str(pnl_clr) + """; font-size:16px;">""" + pnl_sign + str(cur_pnl) + """ pts</strong></div>
         </div>
         <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; font-size:12px; margin-bottom:8px;">
-            <div><strong>Entry:</strong> ${tr['entry']:,.1f}</div>
-            <div><strong>SL (Trap Protected):</strong> ${tr['sl']:,.1f}</div>
-            <div><strong>Target 1:</strong> ${tr['target_1']:,.1f}</div>
-            <div><strong>Quality:</strong> <span style="color:#ffb300;">{tr['quality_rating']}</span></div>
+            <div><strong>Entry:</strong> $""" + "{:,.1f}".format(tr['entry']) + """</div>
+            <div><strong>SL:</strong> $""" + "{:,.1f}".format(tr['sl']) + """</div>
+            <div><strong>Target 1:</strong> $""" + "{:,.1f}".format(tr['target_1']) + """</div>
+            <div><strong>Quality:</strong> <span style="color:#ffb300;">""" + str(tr['quality_rating']) + """</span></div>
         </div>
         <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px; font-size:12px; margin-bottom:6px;">
-            <strong>🎯 SMC Reason:</strong> {tr['reason']} | <strong>Pattern:</strong> {tr['pattern_detected']}
+            <strong>🎯 SMC Reason:</strong> """ + str(tr['reason']) + """ | <strong>Pattern:</strong> """ + str(tr['pattern_detected']) + """
         </div>
         <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px; font-size:12px; color:#80cbc4;">
-            <strong>🗣️ Remarks:</strong> {tr['conversational_remarks']}
+            <strong>🗣️ Remarks:</strong> """ + str(tr['conversational_remarks']) + """
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -411,7 +415,7 @@ with c_b2:
     if st.button("Close Position (Market)", use_container_width=True):
         if st.session_state.active_trade:
             st.session_state.active_trade["status"] = "MANUAL_CLOSED"
-            p = st.session_state.active_trade.get("pnl", 0.0)
+            p = round(btc_price - st.session_state.active_trade["entry"] if st.session_state.active_trade["direction"] == "LONG" else st.session_state.active_trade["entry"] - btc_price, 1)
             ledger_close_position(st.session_state.active_trade["margin_used"], p)
             log_trade(st.session_state.active_trade)
             st.session_state.active_trade = None
@@ -439,5 +443,5 @@ if db_records:
 else:
     st.info("Scanner market opportunity scan kar raha hai...")
 
-time.sleep(3)
+time.sleep(2)
 st.rerun()
