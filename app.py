@@ -105,7 +105,7 @@ def ledger_close(margin_cost, pnl_usd):
                 locked_margin = 0.0, 
                 realized_pnl = realized_pnl + ? 
             WHERE id=1
-        """, (margin_cost, pnl_usd, margin_cost, pnl_usd))
+        """, (margin_cost, pnl_usd, pnl_usd))
         conn.commit()
         conn.close()
     except Exception:
@@ -157,7 +157,7 @@ def send_telegram(msg):
             pass
     if token and chat_id:
         try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            url = "https://api.telegram.org/bot" + token + "/sendMessage"
             requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=2.5)
         except Exception:
             pass
@@ -216,10 +216,10 @@ if st.session_state.active_trade:
         tr["status"] = "CLOSED (TARGET 1 HIT)"
         tr["exit_price"] = btc_price
         profit = 700.0
-        tr["post_trade_feedback"] = "✅ Target 1 Hit: Smooth liquidity run (+350 pts)."
+        tr["post_trade_feedback"] = "Target 1 Hit: Smooth liquidity run (+350 pts)."
         ledger_close(tr["margin_used"], profit)
         log_trade(tr)
-        send_telegram("🎯 *TARGET 1 HIT!* Trade `" + tr['trade_id'] + "` closed. Profit: +$" + str(profit))
+        send_telegram("Target 1 Hit! Trade `" + tr['trade_id'] + "` closed. Profit: +$" + str(profit))
         st.session_state.active_trade = None
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
@@ -229,10 +229,10 @@ if st.session_state.active_trade:
         tr["status"] = "CLOSED (SL HIT)"
         tr["exit_price"] = btc_price
         loss = -360.0
-        tr["post_trade_feedback"] = "⚠️ SL Invalidation: Opposite delta push (-180 pts)."
+        tr["post_trade_feedback"] = "SL Invalidation: Opposite delta push (-180 pts)."
         ledger_close(tr["margin_used"], loss)
         log_trade(tr)
-        send_telegram("🛑 *SL HIT!* Trade `" + tr['trade_id'] + "` closed. Loss: $" + str(loss))
+        send_telegram("SL Hit! Trade `" + tr['trade_id'] + "` closed. Loss: $" + str(loss))
         st.session_state.active_trade = None
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
@@ -262,7 +262,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
             "sl": sl_calc,
             "target_1": t1_calc,
             "margin_used": margin,
-            "quality_rating": "⭐⭐⭐⭐⭐ (9.5/10)",
+            "quality_rating": "5 Stars (9.5/10)",
             "post_trade_feedback": "Active in Market",
             "reason": "15m Bull Flag + VWAP Bounce + Whale Inflow @ $" + str(smc_point),
             "conversational_remarks": remarks,
@@ -273,7 +273,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
         ledger_open(margin)
         st.session_state.active_trade = new_tr
         log_trade(new_tr)
-        send_telegram("⚡ *NEW POSITION OPENED*\nDirection: *" + str(dir_ch) + "* @ $" + str(new_tr['entry']) + "\nID: `" + str(tid) + "`")
+        send_telegram("NEW POSITION OPENED\nDirection: " + str(dir_ch) + " @ $" + str(new_tr['entry']) + "\nID: `" + str(tid) + "`")
         st.rerun()
 
 # Wallet State Sync
@@ -297,11 +297,11 @@ st.write("")
 
 # ----------------- TABS ARCHITECTURE -----------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🖥️ Live Terminal & Active Runner (All-in-One)",
-    "📊 Institutional Technical Indicators Radar",
-    "📈 Multi-Timeframe TradingView Chart",
-    "⚖️ Orderbook & Smart Money Flow",
-    "⚙️ Wallet & Telegram Settings"
+    "Live Terminal & Active Runner (All-in-One)",
+    "Institutional Technical Indicators Radar",
+    "Multi-Timeframe TradingView Chart",
+    "Orderbook & Smart Money Flow",
+    "Wallet & Telegram Settings"
 ])
 
 # ----------------- TAB 1: ALL-IN-ONE TERMINAL -----------------
@@ -351,7 +351,7 @@ with tab1:
 
     with col_action:
         st.write("")
-        if st.button("⚡ Force Manual Opportunity Signal", use_container_width=True):
+        if st.button("Force Manual Opportunity Signal", use_container_width=True):
             st.session_state.cooldown_until = 0
             st.session_state.last_auto_scan = 0
             st.rerun()
@@ -381,22 +381,22 @@ with tab1:
                 <div><strong>Setup Rating:</strong> <span style="color:#ffb300;">{tr['quality_rating']}</span></div>
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; margin-bottom:6px;">
-                <strong>🎯 Institutional Entry Reason:</strong> {tr['reason']}
+                <strong>Institutional Entry Reason:</strong> {tr['reason']}
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; color:#80cbc4;">
-                <strong>🗣️ Trader's Note (Bol-Chaal):</strong> {tr['conversational_remarks']}
+                <strong>Trader's Note:</strong> {tr['conversational_remarks']}
             </div>
         </div>
         """, unsafe_allow_html=True)
 
         col_c1, col_c2 = st.columns([2, 1])
         with col_c1:
-            if st.button("❌ Close Position (Market) & Settle Wallet", use_container_width=True):
+            if st.button("Close Position (Market) & Settle Wallet", use_container_width=True):
                 tr["status"] = "MANUAL_CLOSED"
                 tr["exit_price"] = btc_price
                 settle_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
                 settle_usd = round(settle_points * 2.0, 2)
-                tr["post_trade_feedback"] = f"⚡ Manual Close @ ${btc_price:,.1f}: Realized {settle_points:+.1f} pts (${settle_usd:+.2f})."
+                tr["post_trade_feedback"] = f"Manual Close @ ${btc_price:,.1f}: Realized {settle_points:+.1f} pts (${settle_usd:+.2f})."
                 ledger_close(tr["margin_used"], settle_usd)
                 log_trade(tr)
                 st.session_state.active_trade = None
@@ -411,14 +411,14 @@ with tab1:
     else:
         st.markdown("""
         <div style="background:#0f131c; border: 1px dashed #2a3447; border-radius:6px; padding:18px; text-align:center; margin-top:8px;">
-            <div style="font-size:15px; font-weight:bold; color:#787f91;">🟢 NO ACTIVE RUNNER IN MARKET</div>
+            <div style="font-size:15px; font-weight:bold; color:#787f91;">NO ACTIVE RUNNER IN MARKET</div>
             <div style="font-size:12px; color:#555d6e; margin-top:4px;">Wallet Margin 100% Free ($0.00 Locked). Continuous institutional scanning active.</div>
         </div>
         """, unsafe_allow_html=True)
 
     # Permanent Signals Sheet
     st.write("")
-    st.markdown("##### 📑 PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
+    st.markdown("##### PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
     vault_rows = get_first_tab_ledger()
 
     if vault_rows:
@@ -427,7 +427,7 @@ with tab1:
         ])
         csv_data = df_sheet.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="📥 Export Permanent Ledger Sheet (CSV)",
+            label="Export Permanent Ledger Sheet (CSV)",
             data=csv_data,
             file_name="BTC_Trades_Audit_Vault.csv",
             mime="text/csv"
@@ -438,7 +438,7 @@ with tab1:
 
 # ----------------- TAB 2: VALUABLE QUANTITATIVE INDICATORS RADAR -----------------
 with tab2:
-    st.markdown("##### 🎯 COMPREHENSIVE STRATEGY & TECHNICAL INDICATORS MATRIX")
+    st.markdown("##### COMPREHENSIVE STRATEGY & TECHNICAL INDICATORS MATRIX")
     
     i1, i2, i3, i4 = st.columns(4)
     with i1:
@@ -479,11 +479,13 @@ with tab2:
     st.write("")
     e1, e2, e3, e4 = st.columns(4)
     with e1:
+        # Fixed string without any LaTeX commands
+        ema_text = f"EMA50: ${ema_50:,.1f} \vert{} EMA200:${ema_200:,.1f}"
         st.markdown(f"""
         <div class="card-box">
             <div class="card-title">EMA 20 / 50 / 200 MATRIX</div>
             <div style="font-size:15px; font-weight:bold; color:#00e676; margin-top:6px;">EMA20: ${ema_20:,.1f}</div>
-            <div style="font-size:11px; color:#787f91;">EMA50: ${ema_50:,.1f} \vert{} EMA200:${ema_200:,.1f}</div>
+            <div style="font-size:11px; color:#787f91;">{ema_text}</div>
         </div>
         """, unsafe_allow_html=True)
     with e2:
@@ -512,7 +514,7 @@ with tab2:
         """, unsafe_allow_html=True)
 
     st.write("")
-    st.markdown("###### 🧭 Multi-Timeframe Key Support, Resistance & Live Patterns")
+    st.markdown("###### Multi-Timeframe Key Support, Resistance & Live Patterns")
     sr_cols = st.columns(6)
     for col, (tf, lv) in zip(sr_cols, sr_radar.items()):
         with col:
@@ -529,7 +531,7 @@ with tab2:
 
 # ----------------- TAB 3: TRADINGVIEW ADVANCED CHART -----------------
 with tab3:
-    st.markdown("##### 📈 MULTI-TIMEFRAME TRADINGVIEW ADVANCED CHART")
+    st.markdown("##### MULTI-TIMEFRAME TRADINGVIEW ADVANCED CHART")
     tradingview_widget = """
     <div style="height:520px; width:100%;">
       <div id="tv_chart" style="height:100%; width:100%;"></div>
@@ -555,7 +557,7 @@ with tab3:
 
 # ----------------- TAB 4: ORDERBOOK DEPTH & FLOW -----------------
 with tab4:
-    st.markdown("##### ⚖️ REAL-TIME BUY VS SELL VOLUME PRESSURE")
+    st.markdown("##### REAL-TIME BUY VS SELL VOLUME PRESSURE")
     st.markdown(f"""
     <div class="card-box" style="padding:14px 20px;">
         <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:bold; margin-bottom:6px;">
@@ -590,11 +592,11 @@ with tab4:
 
 # ----------------- TAB 5: WALLET & TELEGRAM SETTINGS -----------------
 with tab5:
-    st.markdown("##### ⚙️ VIRTUAL WALLET & CONFIGURATION")
+    st.markdown("##### VIRTUAL WALLET & CONFIGURATION")
     s1, s2 = st.columns(2)
     with s1:
-        st.markdown("### 💰 Reset Virtual Wallet")
-        if st.button("🔄 Reset Virtual Wallet to $100,000", use_container_width=True):
+        st.markdown("### Reset Virtual Wallet")
+        if st.button("Reset Virtual Wallet to $100,000", use_container_width=True):
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("UPDATE wallet SET balance=100000.0, locked_margin=0.0, realized_pnl=0.0 WHERE id=1")
@@ -607,11 +609,11 @@ with tab5:
             st.rerun()
 
         st.markdown("---")
-        st.markdown("### 🤖 Auto-Trader Engine Control")
+        st.markdown("### Auto-Trader Engine Control")
         st.session_state.auto_trade_enabled = st.toggle("Enable Automated Execution", value=st.session_state.auto_trade_enabled)
 
     with s2:
-        st.markdown("### 🔔 Telegram Notification Settings")
+        st.markdown("### Telegram Notification Settings")
         curr_tok = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         curr_cht = os.environ.get("TELEGRAM_CHAT_ID", "")
         if os.path.exists(CONFIG_FILE):
@@ -628,7 +630,7 @@ with tab5:
         if st.button("Save Credentials & Test Alert", use_container_width=True):
             with open(CONFIG_FILE, "w") as f:
                 json.dump({"token": t_in.strip(), "chat_id": c_in.strip()}, f)
-            t_ok = send_telegram("🔔 *BTC Institutional Terminal Connected!*\n\nReal-time alerts active.")
+            t_ok = send_telegram("BTC Institutional Terminal Connected!\n\nReal-time alerts active.")
             if t_ok:
                 st.success("Telegram test message bhej diya gaya!")
             else:
