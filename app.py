@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
 
-# Custom Dark Trading Desk Styling
+# Custom Dark Styling
 st.markdown("""
 <style>
     .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
@@ -105,7 +105,7 @@ def ledger_close(margin_cost, pnl_usd):
                 locked_margin = 0.0, 
                 realized_pnl = realized_pnl + ? 
             WHERE id=1
-        """, (margin_cost, pnl_usd, pnl_usd))
+        """, (margin_cost, pnl_usd, margin_cost, pnl_usd))
         conn.commit()
         conn.close()
     except Exception:
@@ -175,11 +175,10 @@ if "cooldown_until" not in st.session_state:
 if "auto_trade_enabled" not in st.session_state:
     st.session_state.auto_trade_enabled = True
 
-# ----------------- MULTI-INDICATOR QUANT ENGINES (VALUABLE ADD-ONS) -----------------
+# ----------------- INDICATOR ENGINE METRICS -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
-# Advanced Indicator Matrix Values
 rsi_val = round(random.uniform(46.0, 64.0), 1)
 macd_val = round(random.uniform(12.5, 34.8), 2)
 macd_signal = round(macd_val - random.uniform(2.0, 8.0), 2)
@@ -277,26 +276,26 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
         send_telegram("⚡ *NEW POSITION OPENED*\nDirection: *" + str(dir_ch) + "* @ $" + str(new_tr['entry']) + "\nID: `" + str(tid) + "`")
         st.rerun()
 
-# Wallet State
+# Wallet State Sync
 wallet_bal, locked_margin, realized_pnl = get_wallet()
 
 # ----------------- TOP METRICS BAR -----------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.markdown('<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">$' + "{:,.2f}".format(wallet_bal) + '</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">${wallet_bal:,.2f}</div></div>', unsafe_allow_html=True)
 with m2:
-    st.markdown('<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">$' + "{:,.2f}".format(locked_margin) + '</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">${locked_margin:,.2f}</div></div>', unsafe_allow_html=True)
 with m3:
     p_col = "#00e676" if realized_pnl >= 0 else "#ff5252"
-    st.markdown('<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:' + p_col + ';">$' + "{:,.2f}".format(realized_pnl) + '</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:{p_col};">${realized_pnl:,.2f}</div></div>', unsafe_allow_html=True)
 with m4:
     pos_stat = "ACTIVE RUNNER" if st.session_state.active_trade else "NO OPEN POSITION (SCANNING)"
     stat_clr = "#00e676" if st.session_state.active_trade else "#787f91"
-    st.markdown('<div class="card-box"><div class="card-title">SYSTEM POSITION STATUS</div><div class="card-val" style="color:' + stat_clr + '; font-size:14px; margin-top:8px;">' + pos_stat + '</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card-box"><div class="card-title">SYSTEM POSITION STATUS</div><div class="card-val" style="color:{stat_clr}; font-size:14px; margin-top:8px;">{pos_stat}</div></div>', unsafe_allow_html=True)
 
 st.write("")
 
-# ----------------- CLEAN TAB ARCHITECTURE -----------------
+# ----------------- TABS ARCHITECTURE -----------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🖥️ Live Terminal & Active Runner (All-in-One)",
     "📊 Institutional Technical Indicators Radar",
@@ -309,7 +308,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     col_tape, col_action = st.columns([2, 1])
     
-    # Live Millisecond WebSocket Ticker & Dynamic Floating PnL Streamer
     tr_active = st.session_state.active_trade
     has_active_js = "true" if tr_active else "false"
     entry_js = tr_active["entry"] if tr_active else 0.0
@@ -338,7 +336,6 @@ with tab1:
                 elTape.style.color = p >= lastPTape ? "#00e676" : "#ff5252";
                 lastPTape = p;
 
-                // Sync live floating PnL if element exists
                 const pnlEl = window.parent.document.getElementById("liveFloatingPoints");
                 if (pnlEl && {has_active_js}) {{
                     const diff = ('{dir_js}' === 'LONG') ? (p - {entry_js}) : ({entry_js} - p);
@@ -419,7 +416,7 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-    # First Tab Integrated Permanent Audit Sheet
+    # Permanent Signals Sheet
     st.write("")
     st.markdown("##### 📑 PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
     vault_rows = get_first_tab_ledger()
@@ -443,7 +440,6 @@ with tab1:
 with tab2:
     st.markdown("##### 🎯 COMPREHENSIVE STRATEGY & TECHNICAL INDICATORS MATRIX")
     
-    # Row 1: Core Momentum & Trend Oscillators
     i1, i2, i3, i4 = st.columns(4)
     with i1:
         rsi_color = "#00e676" if 48 <= rsi_val <= 65 else "#ffb300"
@@ -481,7 +477,6 @@ with tab2:
         """, unsafe_allow_html=True)
 
     st.write("")
-    # Row 2: EMA Matrix & SMC Imbalance
     e1, e2, e3, e4 = st.columns(4)
     with e1:
         st.markdown(f"""
@@ -532,7 +527,7 @@ with tab2:
             </div>
             """, unsafe_allow_html=True)
 
-# ----------------- TAB 3: TRADINGVIEW ADVANCED CHART (RESTORED TO ORIGINAL) -----------------
+# ----------------- TAB 3: TRADINGVIEW ADVANCED CHART -----------------
 with tab3:
     st.markdown("##### 📈 MULTI-TIMEFRAME TRADINGVIEW ADVANCED CHART")
     tradingview_widget = """
@@ -639,6 +634,6 @@ with tab5:
             else:
                 st.error("Telegram fail hua! Credentials verify karein.")
 
-# Auto-loop for continuous dynamic scanning & price refresh
+# Continuous scan and update loop
 time.sleep(2)
 st.rerun()
