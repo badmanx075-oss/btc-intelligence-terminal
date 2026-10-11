@@ -105,7 +105,7 @@ def ledger_close(margin_cost, pnl_usd):
                 locked_margin = 0.0, 
                 realized_pnl = realized_pnl + ? 
             WHERE id=1
-        """, (margin_cost, pnl_usd, pnl_usd))
+        """, (margin_cost, pnl_usd, margin_cost, pnl_usd))
         conn.commit()
         conn.close()
     except Exception:
@@ -189,7 +189,7 @@ ema_50 = round(btc_price - 85.0, 1)
 ema_200 = round(btc_price - 320.0, 1)
 bb_upper = round(btc_price + 310.0, 1)
 bb_lower = round(btc_price - 290.0, 1)
-fvg_zone = f"${btc_price - 65.0:,.1f} -${btc_price - 35.0:,.1f}"
+fvg_zone = "$" + "{:,.1f}".format(btc_price - 65.0) + " - $" + "{:,.1f}".format(btc_price - 35.0)
 
 sr_radar = {
     "1m": {"S": round(btc_price - 35.0, 1), "R": round(btc_price + 45.0, 1), "Candle": "Pin Bar Rejection", "Pattern": "Micro Squeeze Trap"},
@@ -219,7 +219,7 @@ if st.session_state.active_trade:
         tr["post_trade_feedback"] = "Target 1 Hit: Smooth liquidity run (+350 pts)."
         ledger_close(tr["margin_used"], profit)
         log_trade(tr)
-        send_telegram("Target 1 Hit! Trade `" + tr['trade_id'] + "` closed. Profit: +$" + str(profit))
+        send_telegram("Target 1 Hit! Trade `" + str(tr['trade_id']) + "` closed. Profit: +$" + str(profit))
         st.session_state.active_trade = None
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
@@ -232,7 +232,7 @@ if st.session_state.active_trade:
         tr["post_trade_feedback"] = "SL Invalidation: Opposite delta push (-180 pts)."
         ledger_close(tr["margin_used"], loss)
         log_trade(tr)
-        send_telegram("SL Hit! Trade `" + tr['trade_id'] + "` closed. Loss: $" + str(loss))
+        send_telegram("SL Hit! Trade `" + str(tr['trade_id']) + "` closed. Loss: $" + str(loss))
         st.session_state.active_trade = None
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
@@ -250,7 +250,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
         
         remarks = (
             "Bhai, 15m frame par FVG liquidity sweep aur Bull Flag confirm hua hai. "
-            "RSI 56 & VWAP bounce par Smart Money entry $" + str(smc_point) + " level se hui hai. $2,500 margin lock karke " + str(dir_ch) + " execute kiya gaya."
+            "RSI 56 aur VWAP bounce par Smart Money entry $" + str(smc_point) + " level se hui hai. $2,500 margin lock karke " + str(dir_ch) + " execute kiya gaya."
         )
         
         new_tr = {
@@ -282,16 +282,16 @@ wallet_bal, locked_margin, realized_pnl = get_wallet()
 # ----------------- TOP METRICS BAR -----------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.markdown(f'<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">${wallet_bal:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">AVAILABLE WALLET BALANCE</div><div class="card-val" style="color:#00e676;">$' + "{:,.2f}".format(wallet_bal) + '</div></div>', unsafe_allow_html=True)
 with m2:
-    st.markdown(f'<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">${locked_margin:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">LOCKED MARGIN (IN TRADES)</div><div class="card-val" style="color:#ffb300;">$' + "{:,.2f}".format(locked_margin) + '</div></div>', unsafe_allow_html=True)
 with m3:
     p_col = "#00e676" if realized_pnl >= 0 else "#ff5252"
-    st.markdown(f'<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:{p_col};">${realized_pnl:,.2f}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:' + p_col + ';">$' + "{:,.2f}".format(realized_pnl) + '</div></div>', unsafe_allow_html=True)
 with m4:
     pos_stat = "ACTIVE RUNNER" if st.session_state.active_trade else "NO OPEN POSITION (SCANNING)"
     stat_clr = "#00e676" if st.session_state.active_trade else "#787f91"
-    st.markdown(f'<div class="card-box"><div class="card-title">SYSTEM POSITION STATUS</div><div class="card-val" style="color:{stat_clr}; font-size:14px; margin-top:8px;">{pos_stat}</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-box"><div class="card-title">SYSTEM POSITION STATUS</div><div class="card-val" style="color:' + stat_clr + '; font-size:14px; margin-top:8px;">' + pos_stat + '</div></div>', unsafe_allow_html=True)
 
 st.write("")
 
@@ -314,11 +314,11 @@ with tab1:
     dir_js = tr_active["direction"] if tr_active else "LONG"
 
     with col_tape:
-        live_ticker_tape = f"""
+        live_ticker_tape = """
         <div style="background:#0f131c; border:1px solid #1c2230; border-radius:6px; padding:12px 18px; display:flex; justify-content:space-between; align-items:center;">
             <div>
                 <div style="font-size:10px; color:#787f91; font-weight:bold;">BTC/USDT LIVE STREAM (MILLISECOND DIRECT FEED)</div>
-                <div id="liveBtcTape" style="font-size:26px; font-weight:bold; color:#00e676; margin-top:2px;">${btc_price:,.2f}</div>
+                <div id="liveBtcTape" style="font-size:26px; font-weight:bold; color:#00e676; margin-top:2px;">$""" + "{:,.2f}".format(btc_price) + """</div>
             </div>
             <div style="text-align:right;">
                 <span style="display:inline-block; width:8px; height:8px; background:#00e676; border-radius:50%; margin-right:4px;"></span>
@@ -329,22 +329,22 @@ with tab1:
             const elTape = document.getElementById("liveBtcTape");
             let lastPTape = 0;
             const wsTape = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-            wsTape.onmessage = (e) => {{
+            wsTape.onmessage = (e) => {
                 const d = JSON.parse(e.data);
                 const p = parseFloat(d.p);
-                elTape.innerText = "$" + p.toLocaleString("en-US", {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                elTape.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
                 elTape.style.color = p >= lastPTape ? "#00e676" : "#ff5252";
                 lastPTape = p;
 
                 const pnlEl = window.parent.document.getElementById("liveFloatingPoints");
-                if (pnlEl && {has_active_js}) {{
-                    const diff = ('{dir_js}' === 'LONG') ? (p - {entry_js}) : ({entry_js} - p);
+                if (pnlEl && """ + has_active_js + """) {
+                    const diff = ('""" + dir_js + """' === 'LONG') ? (p - """ + str(entry_js) + """) : (""" + str(entry_js) + """ - p);
                     const usd = diff * 2.0;
                     const sign = diff >= 0 ? "+" : "";
                     pnlEl.innerText = sign + diff.toFixed(1) + " pts (" + sign + "$" + usd.toFixed(2) + ")";
                     pnlEl.style.color = diff >= 0 ? "#00e676" : "#ff5252";
-                }}
-            }};
+                }
+            };
         </script>
         """
         components.html(live_ticker_tape, height=75)
@@ -364,27 +364,27 @@ with tab1:
         pnl_sign = "+" if diff_points >= 0 else ""
         usd_val = round(diff_points * 2.0, 2)
 
-        st.markdown(f"""
+        st.markdown("""
         <div style="background:#111624; border-left: 4px solid #00e676; border-radius:6px; padding:16px; margin-top:8px; margin-bottom:12px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
                 <div>
                     <span class="status-badge" style="background:#00e676; color:#000;">POSITION OPEN</span>
-                    <strong style="margin-left:8px; font-size:16px;">{tr['direction']} [{tr['trade_id']}]</strong>
-                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: ${tr['margin_used']:,.2f}</span>
+                    <strong style="margin-left:8px; font-size:16px;">""" + str(tr['direction']) + " [" + str(tr['trade_id']) + """]</strong>
+                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: $""" + "{:,.2f}".format(tr['margin_used']) + """</span>
                 </div>
-                <div>Live Floating PnL: <strong id="liveFloatingPoints" style="color:{pnl_clr}; font-size:19px;">{pnl_sign}{diff_points:,.1f} pts (${pnl_sign}{usd_val:,.2f})</strong></div>
+                <div>Live Floating PnL: <strong id="liveFloatingPoints" style="color:""" + pnl_clr + """; font-size:19px;">""" + pnl_sign + "{:,.1f}".format(diff_points) + " pts (" + pnl_sign + "$" + "{:,.2f}".format(usd_val) + """)</strong></div>
             </div>
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; font-size:13px; margin-bottom:10px;">
-                <div><strong>Entry Price:</strong> ${tr['entry']:,.1f}</div>
-                <div><strong>SL (Trap Invalidation):</strong> ${tr['sl']:,.1f}</div>
-                <div><strong>Target 1:</strong> ${tr['target_1']:,.1f}</div>
-                <div><strong>Setup Rating:</strong> <span style="color:#ffb300;">{tr['quality_rating']}</span></div>
+                <div><strong>Entry Price:</strong> $""" + "{:,.1f}".format(tr['entry']) + """</div>
+                <div><strong>SL (Trap Invalidation):</strong> $""" + "{:,.1f}".format(tr['sl']) + """</div>
+                <div><strong>Target 1:</strong> $""" + "{:,.1f}".format(tr['target_1']) + """</div>
+                <div><strong>Setup Rating:</strong> <span style="color:#ffb300;">""" + str(tr['quality_rating']) + """</span></div>
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; margin-bottom:6px;">
-                <strong>Institutional Entry Reason:</strong> {tr['reason']}
+                <strong>Institutional Entry Reason:</strong> """ + str(tr['reason']) + """
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; color:#80cbc4;">
-                <strong>Trader's Note:</strong> {tr['conversational_remarks']}
+                <strong>Trader's Note:</strong> """ + str(tr['conversational_remarks']) + """
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -396,18 +396,18 @@ with tab1:
                 tr["exit_price"] = btc_price
                 settle_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
                 settle_usd = round(settle_points * 2.0, 2)
-                tr["post_trade_feedback"] = f"Manual Close @ ${btc_price:,.1f}: Realized {settle_points:+.1f} pts (${settle_usd:+.2f})."
+                tr["post_trade_feedback"] = "Manual Close @ $" + "{:,.1f}".format(btc_price) + ": Realized " + "{:+.1f}".format(settle_points) + " pts ($" + "{:+.2f}".format(settle_usd) + ")."
                 ledger_close(tr["margin_used"], settle_usd)
                 log_trade(tr)
                 st.session_state.active_trade = None
                 st.session_state.cooldown_until = time.time() + 25
-                st.success(f"Position Closed! Margin released and ${settle_usd:,.2f} settled into wallet.")
+                st.success("Position Closed! Margin released and $" + "{:,.2f}".format(settle_usd) + " settled into wallet.")
                 time.sleep(1)
                 st.rerun()
         with col_c2:
             if st.button("Move SL to Breakeven", use_container_width=True):
                 tr["sl"] = tr["entry"]
-                st.info(f"SL moved to Breakeven (${tr['entry']:,.1f}).")
+                st.info("SL moved to Breakeven ($" + "{:,.1f}".format(tr['entry']) + ").")
     else:
         st.markdown("""
         <div style="background:#0f131c; border: 1px dashed #2a3447; border-radius:6px; padding:18px; text-align:center; margin-top:8px;">
@@ -443,35 +443,35 @@ with tab2:
     i1, i2, i3, i4 = st.columns(4)
     with i1:
         rsi_color = "#00e676" if 48 <= rsi_val <= 65 else "#ffb300"
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">RSI (14 PERIOD)</div>
-            <div class="card-val" style="color:{rsi_color};">{rsi_val}</div>
+            <div class="card-val" style="color:""" + rsi_color + """;">""" + str(rsi_val) + """</div>
             <div style="font-size:10px; color:#787f91; margin-top:3px;">Zone: Momentum Expansion</div>
         </div>
         """, unsafe_allow_html=True)
     with i2:
         macd_color = "#00e676" if macd_val > macd_signal else "#ff5252"
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">MACD HISTOGRAM & SIGNAL</div>
-            <div class="card-val" style="color:{macd_color};">+{macd_val} / {macd_signal}</div>
+            <div class="card-val" style="color:""" + macd_color + """;">+""" + str(macd_val) + " / " + str(macd_signal) + """</div>
             <div style="font-size:10px; color:#787f91; margin-top:3px;">Bias: Bullish Momentum Cross</div>
         </div>
         """, unsafe_allow_html=True)
     with i3:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">VOLATILITY ATR (DYNAMIC SL)</div>
-            <div class="card-val" style="color:#29b6f6;">${atr_val} pts</div>
+            <div class="card-val" style="color:#29b6f6;">$""" + str(atr_val) + """ pts</div>
             <div style="font-size:10px; color:#787f91; margin-top:3px;">Volatility Risk Filter: Optimal</div>
         </div>
         """, unsafe_allow_html=True)
     with i4:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">INSTITUTIONAL VWAP BENCHMARK</div>
-            <div class="card-val" style="color:#00e676;">${vwap_level:,.1f}</div>
+            <div class="card-val" style="color:#00e676;">$""" + "{:,.1f}".format(vwap_level) + """</div>
             <div style="font-size:10px; color:#787f91; margin-top:3px;">Position: Above Anchor VWAP</div>
         </div>
         """, unsafe_allow_html=True)
@@ -479,36 +479,34 @@ with tab2:
     st.write("")
     e1, e2, e3, e4 = st.columns(4)
     with e1:
-        # Fixed string without any LaTeX commands
-        ema_text = f"EMA50: ${ema_50:,.1f} \vert{} EMA200:${ema_200:,.1f}"
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">EMA 20 / 50 / 200 MATRIX</div>
-            <div style="font-size:15px; font-weight:bold; color:#00e676; margin-top:6px;">EMA20: ${ema_20:,.1f}</div>
-            <div style="font-size:11px; color:#787f91;">{ema_text}</div>
+            <div style="font-size:15px; font-weight:bold; color:#00e676; margin-top:6px;">EMA20: $""" + "{:,.1f}".format(ema_20) + """</div>
+            <div style="font-size:11px; color:#787f91;">EMA50: $""" + "{:,.1f}".format(ema_50) + " \vert{} EMA200: $" + "{:,.1f}".format(ema_200) + """</div>
         </div>
         """, unsafe_allow_html=True)
     with e2:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">BOLLINGER BANDS (20, 2)</div>
-            <div style="font-size:15px; font-weight:bold; color:#ffb300; margin-top:6px;">Band: ${bb_lower:,.0f} -${bb_upper:,.0f}</div>
+            <div style="font-size:15px; font-weight:bold; color:#ffb300; margin-top:6px;">Band: $""" + "{:,.0f}".format(bb_lower) + " - $" + "{:,.0f}".format(bb_upper) + """</div>
             <div style="font-size:11px; color:#787f91;">Bandwidth Squeeze: Expanding Breakout</div>
         </div>
         """, unsafe_allow_html=True)
     with e3:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">FAIR VALUE GAP (FVG) ZONE</div>
-            <div style="font-size:15px; font-weight:bold; color:#29b6f6; margin-top:6px;">{fvg_zone}</div>
+            <div style="font-size:15px; font-weight:bold; color:#29b6f6; margin-top:6px;">""" + fvg_zone + """</div>
             <div style="font-size:11px; color:#787f91;">Imbalance Status: 100% Mitigated</div>
         </div>
         """, unsafe_allow_html=True)
     with e4:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">SMC WHALE & TRAP DETECTOR</div>
-            <div style="font-size:14px; font-weight:bold; color:#00e676; margin-top:6px;">{trap_detector}</div>
+            <div style="font-size:14px; font-weight:bold; color:#00e676; margin-top:6px;">""" + str(trap_detector) + """</div>
             <div style="font-size:11px; color:#787f91;">Anti-Fakeout Filter: Pass</div>
         </div>
         """, unsafe_allow_html=True)
@@ -518,14 +516,14 @@ with tab2:
     sr_cols = st.columns(6)
     for col, (tf, lv) in zip(sr_cols, sr_radar.items()):
         with col:
-            st.markdown(f"""
+            st.markdown("""
             <div class="card-box" style="padding:10px; text-align:center;">
-                <div style="font-size:13px; font-weight:bold; color:#29b6f6;">{tf} FRAME</div>
-                <div style="font-size:11px; color:#ff5252; margin-top:3px;">Res: ${lv['R']:,.1f}</div>
-                <div style="font-size:11px; color:#00e676;">Sup: ${lv['S']:,.1f}</div>
+                <div style="font-size:13px; font-weight:bold; color:#29b6f6;">""" + str(tf) + """ FRAME</div>
+                <div style="font-size:11px; color:#ff5252; margin-top:3px;">Res: $""" + "{:,.1f}".format(lv['R']) + """</div>
+                <div style="font-size:11px; color:#00e676;">Sup: $""" + "{:,.1f}".format(lv['S']) + """</div>
                 <hr style="border:0; border-top:1px solid #1c2230; margin:6px 0;">
-                <div style="font-size:10px; color:#ffb300; font-weight:bold;">{lv['Pattern']}</div>
-                <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: {lv['Candle']}</div>
+                <div style="font-size:10px; color:#ffb300; font-weight:bold;">""" + str(lv['Pattern']) + """</div>
+                <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: """ + str(lv['Candle']) + """</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -558,15 +556,15 @@ with tab3:
 # ----------------- TAB 4: ORDERBOOK DEPTH & FLOW -----------------
 with tab4:
     st.markdown("##### REAL-TIME BUY VS SELL VOLUME PRESSURE")
-    st.markdown(f"""
+    st.markdown("""
     <div class="card-box" style="padding:14px 20px;">
         <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:bold; margin-bottom:6px;">
-            <span style="color:#00e676;">BUYERS (BIDS): {buyer_ratio}%</span>
-            <span style="color:#ff5252;">SELLERS (ASKS): {seller_ratio}%</span>
+            <span style="color:#00e676;">BUYERS (BIDS): """ + str(buyer_ratio) + """%</span>
+            <span style="color:#ff5252;">SELLERS (ASKS): """ + str(seller_ratio) + """%</span>
         </div>
         <div style="width:100%; height:14px; background:#26181d; border-radius:7px; overflow:hidden; display:flex;">
-            <div style="width:{buyer_ratio}%; height:100%; background:#00e676;"></div>
-            <div style="width:{seller_ratio}%; height:100%; background:#ff5252;"></div>
+            <div style="width:""" + str(buyer_ratio) + """%; height:100%; background:#00e676;"></div>
+            <div style="width:""" + str(seller_ratio) + """%; height:100%; background:#ff5252;"></div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -574,10 +572,10 @@ with tab4:
     st.write("")
     o1, o2 = st.columns(2)
     with o1:
-        st.markdown(f"""
+        st.markdown("""
         <div class="card-box">
             <div class="card-title">SMART MONEY INSTITUTIONAL INFLOW</div>
-            <div style="font-size:18px; font-weight:bold; color:#29b6f6; margin-top:6px;">Whale Cluster @ ${smc_point:,.1f}</div>
+            <div style="font-size:18px; font-weight:bold; color:#29b6f6; margin-top:6px;">Whale Cluster @ $""" + "{:,.1f}".format(smc_point) + """</div>
             <div style="font-size:12px; color:#88909e; margin-top:4px;">Whale clusters continuously absorbing limit orders on Bybit/Binance.</div>
         </div>
         """, unsafe_allow_html=True)
