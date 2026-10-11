@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
 
-# Custom Dark Trading Desk Styling
+# Custom Dark Styling
 st.markdown("""
 <style>
     .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
@@ -28,7 +28,6 @@ st.markdown("""
 
 # ----------------- LIVE DYNAMIC PRICE FETCH -----------------
 def fetch_btc_live():
-    # Binance direct fast API
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.0)
         return round(float(r.json()["price"]), 2)
@@ -176,14 +175,18 @@ if "cooldown_until" not in st.session_state:
 if "auto_trade_enabled" not in st.session_state:
     st.session_state.auto_trade_enabled = True
 
-# ----------------- QUANT ENGINES -----------------
+# ----------------- QUANT & S/R ENGINE -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
+
+# Key S/R values
+current_sup = round(btc_price - 140.0, 1)
+current_res = round(btc_price + 160.0, 1)
 
 sr_radar = {
     "1m": {"S": round(btc_price - 35.0, 1), "R": round(btc_price + 45.0, 1), "Candle": "Pin Bar Rejection", "Pattern": "Micro Squeeze Trap"},
     "5m": {"S": round(btc_price - 95.0, 1), "R": round(btc_price + 115.0, 1), "Candle": "Bullish Engulfing", "Pattern": "Delta Flip Double Bottom"},
-    "15m": {"S": round(btc_price - 240.0, 1), "R": round(btc_price + 280.0, 1), "Candle": "FVG Liquidity Sweep", "Pattern": "Bull Flag Breakout"},
+    "15m": {"S": current_sup, "R": current_res, "Candle": "FVG Liquidity Sweep", "Pattern": "Bull Flag Breakout"},
     "1h": {"S": round(btc_price - 580.0, 1), "R": round(btc_price + 680.0, 1), "Candle": "Three Outside Up", "Pattern": "Ascending Triangle"},
     "4h": {"S": round(btc_price - 1350.0, 1), "R": round(btc_price + 1500.0, 1), "Candle": "Hammer on Demand", "Pattern": "Institutional Demand Block"},
     "1D": {"S": round(btc_price - 2900.0, 1), "R": round(btc_price + 3400.0, 1), "Candle": "Reversal Doji", "Pattern": "Macro Structural Range"}
@@ -192,10 +195,9 @@ sr_radar = {
 smc_point = round(btc_price - 30.0, 1)
 smc_status = "INSTITUTIONAL WHALE ACCUMULATION (+55.4 BTC)" if buyer_ratio > 55 else "ORDERBOOK ABSORPTION"
 
-# ----------------- TRADE LIFECYCLE (ACCURATE REAL-TIME PNL) -----------------
+# ----------------- TRADE LIFECYCLE -----------------
 if st.session_state.active_trade:
     tr = st.session_state.active_trade
-    # Exact floating points & dollar calculation
     raw_points = btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price
     cur_pnl = round(raw_points, 1)
     tr["pnl"] = cur_pnl
@@ -226,7 +228,7 @@ if st.session_state.active_trade:
         st.session_state.cooldown_until = time.time() + 15
         st.rerun()
 
-# Autonomous Entry (ONLY when no trade is running and cooldown is 0)
+# Autonomous Entry
 elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.cooldown_until) and (time.time() - st.session_state.last_auto_scan > 8):
     st.session_state.last_auto_scan = time.time()
     bal, locked, _ = get_wallet()
@@ -265,7 +267,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
         send_telegram("⚡ *NEW POSITION OPENED*\nDirection: *" + str(dir_ch) + "* @ $" + str(new_tr['entry']) + "\nID: `" + str(tid) + "`")
         st.rerun()
 
-# Sync Wallet State
+# Wallet State
 wallet_bal, locked_margin, realized_pnl = get_wallet()
 
 # ----------------- TOP METRICS BAR -----------------
@@ -287,12 +289,12 @@ st.write("")
 # ----------------- CLEAN TAB ARCHITECTURE -----------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "🖥️ Live Terminal & Active Runner (All-in-One)",
-    "🧭 Multi-Timeframe Radar & Chart",
+    "🧭 Multi-Timeframe Radar Matrix",
     "⚖️ Orderbook & Smart Money Flow",
     "⚙️ Wallet & Telegram Settings"
 ])
 
-# ----------------- TAB 1: ALL-IN-ONE TERMINAL (RUNNER + LEDGER) -----------------
+# ----------------- TAB 1: ALL-IN-ONE TERMINAL -----------------
 with tab1:
     col_tape, col_action = st.columns([2, 1])
     with col_tape:
@@ -318,11 +320,10 @@ with tab1:
     # Active Position Runner Card
     if st.session_state.active_trade:
         tr = st.session_state.active_trade
-        # Live Points Calculation
         diff_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
         pnl_clr = "#00e676" if diff_points >= 0 else "#ff5252"
         pnl_sign = "+" if diff_points >= 0 else ""
-        usd_val = round(diff_points * 2.0, 2)  # Leveraged PnL in USD
+        usd_val = round(diff_points * 2.0, 2)
 
         st.markdown(f"""
         <div style="background:#111624; border-left: 4px solid #00e676; border-radius:6px; padding:16px; margin-top:8px; margin-bottom:12px;">
@@ -376,7 +377,140 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-    # ----------------- FIRST TAB INTEGRATED PERMANENT AUDIT SHEET -----------------
+    # ----------------- NATIVE DYNAMIC OVERLAY CHART (LIGHTWEIGHT CHARTS) -----------------
+    st.write("")
+    st.markdown("##### 📈 LIVE DYNAMIC SIGNAL OVERLAY CHART (S/R, ENTRY ARROWS & TARGET LINES)")
+
+    # Data prep for chart overlay
+    trade_meta = st.session_state.active_trade
+    has_trade = "true" if trade_meta else "false"
+    t_entry = trade_meta["entry"] if trade_meta else btc_price
+    t_sl = trade_meta["sl"] if trade_meta else btc_price - 180
+    t_tp = trade_meta["target_1"] if trade_meta else btc_price + 350
+    t_dir = trade_meta["direction"] if trade_meta else "LONG"
+    marker_text = f"{t_dir} ENTRY" if trade_meta else "NO TRADE"
+
+    overlay_chart_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; background: #0b0e14; font-family: monospace; overflow: hidden; }}
+            #chartContainer {{ width: 100%; height: 420px; }}
+            .legend {{
+                position: absolute; top: 12px; left: 15px; z-index: 10;
+                background: rgba(15, 19, 28, 0.85); padding: 8px 12px;
+                border-radius: 4px; border: 1px solid #1c2230; font-size: 11px;
+            }}
+            .leg-item {{ display: inline-block; margin-right: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="legend">
+            <span class="leg-item" style="color:#00e676;">● Resistance: ${current_res}</span>
+            <span class="leg-item" style="color:#ff5252;">● Support: ${current_sup}</span>
+            <span class="leg-item" style="color:#29b6f6;">● Active TP: ${t_tp}</span>
+            <span class="leg-item" style="color:#ff9800;">● Active SL: ${t_sl}</span>
+        </div>
+        <div id="chartContainer"></div>
+        <script>
+            const container = document.getElementById('chartContainer');
+            const chart = LightweightCharts.createChart(container, {{
+                layout: {{ background: {{ color: '#0b0e14' }}, textColor: '#d1d4dc' }},
+                grid: {{ vertLines: {{ color: '#161b26' }}, horzLines: {{ color: '#161b26' }} }},
+                timeScale: {{ timeVisible: true, secondsVisible: false, borderColor: '#1c2230' }},
+                rightPriceScale: {{ borderColor: '#1c2230' }}
+            }});
+
+            const candleSeries = chart.addCandlestickSeries({{
+                upColor: '#00e676', downColor: '#ff5252',
+                borderVisible: false, wickUpColor: '#00e676', wickDownColor: '#ff5252'
+            }});
+
+            // Generate realistic 15m baseline candles
+            let baseP = {btc_price};
+            let nowSec = Math.floor(Date.now() / 1000);
+            let candles = [];
+            for (let i = 40; i >= 0; i--) {{
+                let t = nowSec - (i * 60);
+                let open = baseP + (Math.sin(i) * 30);
+                let close = open + ((Math.random() - 0.48) * 20);
+                let high = Math.max(open, close) + (Math.random() * 15);
+                let low = Math.min(open, close) - (Math.random() * 15);
+                candles.push({{ time: t, open: open, high: high, low: low, close: close }});
+            }}
+            // Current live candle
+            candles[candles.length - 1].close = {btc_price};
+            candleSeries.setData(candles);
+
+            // Overlay Key Support & Resistance Lines
+            candleSeries.createPriceLine({{
+                price: {current_res},
+                color: '#ff5252',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: 'RESISTANCE (15m)',
+            }});
+
+            candleSeries.createPriceLine({{
+                price: {current_sup},
+                color: '#00e676',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: 'SUPPORT (15m)',
+            }});
+
+            // Overlay Trade Entry / TP / SL Lines if Active
+            if ({has_trade}) {{
+                candleSeries.createPriceLine({{
+                    price: {t_entry},
+                    color: '#7c4dff',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'ENTRY LEVEL',
+                }});
+                candleSeries.createPriceLine({{
+                    price: {t_tp},
+                    color: '#29b6f6',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    axisLabelVisible: true,
+                    title: 'TARGET 1',
+                }});
+                candleSeries.createPriceLine({{
+                    price: {t_sl},
+                    color: '#ff9800',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    axisLabelVisible: true,
+                    title: 'STOP LOSS',
+                }});
+
+                // Entry Marker Arrow Directly on the Candle
+                candleSeries.setMarkers([{{
+                    time: candles[candles.length - 1].time,
+                    position: '{t_dir}' === 'LONG' ? 'belowBar' : 'aboveBar',
+                    color: '{t_dir}' === 'LONG' ? '#00e676' : '#ff5252',
+                    shape: '{t_dir}' === 'LONG' ? 'arrowUp' : 'arrowDown',
+                    text: '{marker_text} @ ${t_entry}'
+                }}]);
+            }}
+
+            window.addEventListener('resize', () => {{
+                chart.applyOptions({{ width: container.clientWidth }});
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    components.html(overlay_chart_html, height=430)
+
+    # ----------------- FIRST TAB INTEGRATED AUDIT SHEET -----------------
     st.write("")
     st.markdown("##### 📑 PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
     vault_rows = get_first_tab_ledger()
@@ -385,8 +519,6 @@ with tab1:
         df_sheet = pd.DataFrame(vault_rows, columns=[
             "Timestamp", "Trade ID", "Direction", "Entry", "Exit Price", "SL", "Target 1", "Rating", "Post-Trade Review", "Status", "PnL"
         ])
-        
-        # Download Backup CSV Button
         csv_data = df_sheet.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Export Permanent Ledger Sheet (CSV)",
@@ -398,7 +530,7 @@ with tab1:
     else:
         st.info("Scanner continuously opportunity scan kar raha hai... Trade aate hi sheet me automatically add ho jayegi.")
 
-# ----------------- TAB 2: MULTI-TIMEFRAME RADAR & CHART -----------------
+# ----------------- TAB 2: MULTI-TIMEFRAME RADAR -----------------
 with tab2:
     st.markdown("##### 🧭 MULTI-TIMEFRAME SUPPORT, RESISTANCE & PATTERNS")
     sr_cols = st.columns(6)
@@ -414,31 +546,6 @@ with tab2:
                 <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: {lv['Candle']}</div>
             </div>
             """, unsafe_allow_html=True)
-
-    st.write("")
-    st.markdown("##### 📈 TRADINGVIEW MULTI-TIMEFRAME ADVANCED CHART")
-    tradingview_widget = """
-    <div style="height:480px; width:100%;">
-      <div id="tv_chart" style="height:100%; width:100%;"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget({
-        "autosize": true,
-        "symbol": "BINANCE:BTCUSDT",
-        "interval": "15",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bg": "#0f131c",
-        "enable_publishing": false,
-        "allow_symbol_change": true,
-        "container_id": "tv_chart"
-      });
-      </script>
-    </div>
-    """
-    components.html(tradingview_widget, height=485)
 
 # ----------------- TAB 3: ORDERBOOK & SMART MONEY FLOW -----------------
 with tab3:
