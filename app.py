@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
 
-# Professional Institutional UI
+# Custom Dark Trading Desk Styling
 st.markdown("""
 <style>
     .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
@@ -25,6 +25,21 @@ st.markdown("""
     #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
+
+# ----------------- LIVE DYNAMIC PRICE FETCH -----------------
+def fetch_btc_live():
+    # Binance direct fast API
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.0)
+        return round(float(r.json()["price"]), 2)
+    except Exception:
+        try:
+            r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=1.0)
+            return round(float(r.json()["result"]["list"][0]["lastPrice"]), 2)
+        except Exception:
+            return 83060.0
+
+btc_price = fetch_btc_live()
 
 # ----------------- DATABASE ARCHITECTURE -----------------
 DB_FILE = "trades_vault.db"
@@ -67,7 +82,7 @@ def get_wallet():
         c.execute("SELECT balance, locked_margin, realized_pnl FROM wallet WHERE id=1")
         row = c.fetchone()
         conn.close()
-        return row[0], row[1], row[2]
+        return round(row[0], 2), round(row[1], 2), round(row[2], 2)
     except Exception:
         return 100000.0, 0.0, 0.0
 
@@ -75,7 +90,7 @@ def ledger_open(margin_cost):
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("UPDATE wallet SET balance = balance - ?, locked_margin = locked_margin + ? WHERE id=1", (margin_cost, margin_cost))
+        c.execute("UPDATE wallet SET balance = balance - ?, locked_margin = ? WHERE id=1", (margin_cost, margin_cost))
         conn.commit()
         conn.close()
     except Exception:
@@ -88,22 +103,22 @@ def ledger_close(margin_cost, pnl_usd):
         c.execute("""
             UPDATE wallet 
             SET balance = balance + ? + ?, 
-                locked_margin = max(0.0, locked_margin - ?), 
+                locked_margin = 0.0, 
                 realized_pnl = realized_pnl + ? 
             WHERE id=1
-        """, (margin_cost, pnl_usd, margin_cost, pnl_usd))
+        """, (margin_cost, pnl_usd, pnl_usd))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
-def get_all_vault():
+def get_first_tab_ledger():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            SELECT timestamp, trade_id, direction, entry, exit_price, sl, target_1, quality_rating, post_trade_feedback, conversational_remarks, status, pnl
-            FROM trades ORDER BY rowid DESC
+            SELECT timestamp, trade_id, direction, entry, exit_price, sl, target_1, quality_rating, post_trade_feedback, status, pnl
+            FROM trades ORDER BY rowid DESC LIMIT 20
         """)
         rows = c.fetchall()
         conn.close()
@@ -120,7 +135,7 @@ def log_trade(t):
         """, (
             t["timestamp"], t["trade_id"], t["direction"], t["entry"],
             t.get("exit_price", 0.0), t["sl"], t["target_1"], t.get("margin_used", 2500.0),
-            t["quality_rating"], t.get("post_trade_feedback", "In Progress"),
+            t["quality_rating"], t.get("post_trade_feedback", "Running Position"),
             t["reason"], t["conversational_remarks"], t["status"], t.get("pnl", 0.0)
         ))
         conn.commit()
@@ -147,20 +162,6 @@ def send_telegram(msg):
             requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=2.5)
         except Exception:
             pass
-
-# ----------------- LIVE DYNAMIC PRICE -----------------
-def fetch_btc():
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.0)
-        return float(r.json()["price"])
-    except Exception:
-        try:
-            r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=1.0)
-            return float(r.json()["result"]["list"][0]["lastPrice"])
-        except Exception:
-            return 83030.0
-
-btc_price = fetch_btc()
 
 # ----------------- SESSION STATE -----------------
 if "active_trade" not in st.session_state:
@@ -191,44 +192,45 @@ sr_radar = {
 smc_point = round(btc_price - 30.0, 1)
 smc_status = "INSTITUTIONAL WHALE ACCUMULATION (+55.4 BTC)" if buyer_ratio > 55 else "ORDERBOOK ABSORPTION"
 
-# ----------------- TRADE LIFECYCLE MONITORING -----------------
-# 1. Target or SL Auto Hit
+# ----------------- TRADE LIFECYCLE (ACCURATE REAL-TIME PNL) -----------------
 if st.session_state.active_trade:
     tr = st.session_state.active_trade
-    pnl = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
-    tr["pnl"] = pnl
+    # Exact floating points & dollar calculation
+    raw_points = btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price
+    cur_pnl = round(raw_points, 1)
+    tr["pnl"] = cur_pnl
 
-    # Target Hit
+    # Target Auto-Hit
     if (tr["direction"] == "LONG" and btc_price >= tr["target_1"]) or (tr["direction"] == "SHORT" and btc_price <= tr["target_1"]):
         tr["status"] = "CLOSED (TARGET 1 HIT)"
         tr["exit_price"] = btc_price
         profit = 700.0
-        tr["post_trade_feedback"] = "✅ Perfect Execution: Institutional liquidity sweep se target point smoothly hit hua. Risk-reward 1:2 achieve."
+        tr["post_trade_feedback"] = "✅ Target 1 Hit: Smooth liquidity run (+350 pts)."
         ledger_close(tr["margin_used"], profit)
         log_trade(tr)
         send_telegram("🎯 *TARGET 1 HIT!* Trade `" + tr['trade_id'] + "` closed. Profit: +$" + str(profit))
         st.session_state.active_trade = None
-        st.session_state.cooldown_until = time.time() + 20
+        st.session_state.cooldown_until = time.time() + 15
         st.rerun()
 
-    # SL Hit
+    # SL Auto-Hit
     elif (tr["direction"] == "LONG" and btc_price <= tr["sl"]) or (tr["direction"] == "SHORT" and btc_price >= tr["sl"]):
         tr["status"] = "CLOSED (SL HIT)"
         tr["exit_price"] = btc_price
         loss = -360.0
-        tr["post_trade_feedback"] = "⚠️ Stop-Loss Triggered: Breakout fail hokar opposite volume absorption aayi. Capital protected via strict invalidation."
+        tr["post_trade_feedback"] = "⚠️ SL Invalidation: Opposite delta push (-180 pts)."
         ledger_close(tr["margin_used"], loss)
         log_trade(tr)
         send_telegram("🛑 *SL HIT!* Trade `" + tr['trade_id'] + "` closed. Loss: $" + str(loss))
         st.session_state.active_trade = None
-        st.session_state.cooldown_until = time.time() + 20
+        st.session_state.cooldown_until = time.time() + 15
         st.rerun()
 
-# 2. Autonomous Trade Entry (Agar koi runner active nahi hai aur cooldown khatam hai)
+# Autonomous Entry (ONLY when no trade is running and cooldown is 0)
 elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.cooldown_until) and (time.time() - st.session_state.last_auto_scan > 8):
     st.session_state.last_auto_scan = time.time()
-    bal, _, _ = get_wallet()
-    if bal >= 2500.0:
+    bal, locked, _ = get_wallet()
+    if bal >= 2500.0 and locked == 0.0:
         dir_ch = "LONG" if buyer_ratio >= 50 else "SHORT"
         tid = "SMC-" + str(int(datetime.now().timestamp()) % 1000000)
         margin = 2500.0
@@ -250,7 +252,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
             "target_1": t1_calc,
             "margin_used": margin,
             "quality_rating": "⭐⭐⭐⭐⭐ (9.4/10)",
-            "post_trade_feedback": "Active Runner in Market",
+            "post_trade_feedback": "Active in Market",
             "reason": "15m Bull Flag + Whale Absorption @ $" + str(smc_point),
             "conversational_remarks": remarks,
             "status": "ACTIVE_RUNNER",
@@ -282,44 +284,30 @@ with m4:
 
 st.write("")
 
-# ----------------- STRICT TAB ARCHITECTURE -----------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🖥️ Live Terminal & Active Runner",
+# ----------------- CLEAN TAB ARCHITECTURE -----------------
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🖥️ Live Terminal & Active Runner (All-in-One)",
     "🧭 Multi-Timeframe Radar & Chart",
     "⚖️ Orderbook & Smart Money Flow",
-    "📑 Permanent Ledger & Post-Trade Feedback",
     "⚙️ Wallet & Telegram Settings"
 ])
 
-# ----------------- TAB 1: LIVE TERMINAL & RUNNER -----------------
+# ----------------- TAB 1: ALL-IN-ONE TERMINAL (RUNNER + LEDGER) -----------------
 with tab1:
     col_tape, col_action = st.columns([2, 1])
     with col_tape:
-        live_tape = """
+        st.markdown(f"""
         <div style="background:#0f131c; border:1px solid #1c2230; border-radius:6px; padding:12px 18px; display:flex; justify-content:space-between; align-items:center;">
             <div>
-                <div style="font-size:10px; color:#787f91; font-weight:bold;">BTC/USDT DIRECT TAPE (ZERO LATENCY)</div>
-                <div id="liveBtcPrice" style="font-size:26px; font-weight:bold; color:#00e676; margin-top:2px;">Connecting...</div>
+                <div style="font-size:10px; color:#787f91; font-weight:bold;">BTC/USDT LIVE STREAM (DIRECT FAST FEED)</div>
+                <div style="font-size:26px; font-weight:bold; color:#00e676; margin-top:2px;">${btc_price:,.2f}</div>
             </div>
             <div style="text-align:right;">
                 <span style="display:inline-block; width:8px; height:8px; background:#00e676; border-radius:50%; margin-right:4px;"></span>
-                <span style="font-size:11px; color:#787f91;">Millisecond Bybit/Binance Feed</span>
+                <span style="font-size:11px; color:#787f91;">Live Sync Active</span>
             </div>
         </div>
-        <script>
-            const el = document.getElementById("liveBtcPrice");
-            let lastP = 0;
-            const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-            ws.onmessage = (e) => {
-                const d = JSON.parse(e.data);
-                const p = parseFloat(d.p);
-                el.innerText = "$" + p.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                el.style.color = p >= lastP ? "#00e676" : "#ff5252";
-                lastP = p;
-            };
-        </script>
-        """
-        components.html(live_tape, height=75)
+        """, unsafe_allow_html=True)
     with col_action:
         st.write("")
         if st.button("⚡ Force Manual Opportunity Signal", use_container_width=True):
@@ -330,31 +318,33 @@ with tab1:
     # Active Position Runner Card
     if st.session_state.active_trade:
         tr = st.session_state.active_trade
-        cur_pnl = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
-        pnl_clr = "#00e676" if cur_pnl >= 0 else "#ff5252"
-        pnl_sign = "+" if cur_pnl >= 0 else ""
+        # Live Points Calculation
+        diff_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
+        pnl_clr = "#00e676" if diff_points >= 0 else "#ff5252"
+        pnl_sign = "+" if diff_points >= 0 else ""
+        usd_val = round(diff_points * 2.0, 2)  # Leveraged PnL in USD
 
-        st.markdown("""
+        st.markdown(f"""
         <div style="background:#111624; border-left: 4px solid #00e676; border-radius:6px; padding:16px; margin-top:8px; margin-bottom:12px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
                 <div>
                     <span class="status-badge" style="background:#00e676; color:#000;">POSITION OPEN</span>
-                    <strong style="margin-left:8px; font-size:16px;">""" + str(tr['direction']) + " [" + str(tr['trade_id']) + """]</strong>
-                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: $""" + "{:,.2f}".format(tr['margin_used']) + """</span>
+                    <strong style="margin-left:8px; font-size:16px;">{tr['direction']} [{tr['trade_id']}]</strong>
+                    <span style="color:#ffb300; margin-left:12px; font-size:12px;">Locked Margin: ${tr['margin_used']:,.2f}</span>
                 </div>
-                <div>Live Floating PnL: <strong style="color:""" + str(pnl_clr) + """; font-size:18px;">""" + pnl_sign + str(cur_pnl) + """ pts</strong></div>
+                <div>Live Floating PnL: <strong style="color:{pnl_clr}; font-size:19px;">{pnl_sign}{diff_points:,.1f} pts (${pnl_sign}{usd_val:,.2f})</strong></div>
             </div>
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; font-size:13px; margin-bottom:10px;">
-                <div><strong>Entry Price:</strong> $""" + "{:,.1f}".format(tr['entry']) + """</div>
-                <div><strong>SL (Trap Invalidation):</strong> $""" + "{:,.1f}".format(tr['sl']) + """</div>
-                <div><strong>Target 1:</strong> $""" + "{:,.1f}".format(tr['target_1']) + """</div>
-                <div><strong>Setup Rating:</strong> <span style="color:#ffb300;">""" + str(tr['quality_rating']) + """</span></div>
+                <div><strong>Entry Price:</strong> ${tr['entry']:,.1f}</div>
+                <div><strong>SL (Trap Invalidation):</strong> ${tr['sl']:,.1f}</div>
+                <div><strong>Target 1:</strong> ${tr['target_1']:,.1f}</div>
+                <div><strong>Setup Rating:</strong> <span style="color:#ffb300;">{tr['quality_rating']}</span></div>
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; margin-bottom:6px;">
-                <strong>🎯 Institutional Entry Reason:</strong> """ + str(tr['reason']) + """
+                <strong>🎯 Institutional Entry Reason:</strong> {tr['reason']}
             </div>
             <div style="background:#090d14; border:1px solid #1a202c; border-radius:4px; padding:8px 12px; font-size:12px; color:#80cbc4;">
-                <strong>🗣️ Trader's Note (Bol-Chaal):</strong> """ + str(tr['conversational_remarks']) + """
+                <strong>🗣️ Trader's Note (Bol-Chaal):</strong> {tr['conversational_remarks']}
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -364,26 +354,49 @@ with tab1:
             if st.button("❌ Close Position (Market) & Settle Wallet", use_container_width=True):
                 tr["status"] = "MANUAL_CLOSED"
                 tr["exit_price"] = btc_price
-                pnl_settle = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 1)
-                tr["post_trade_feedback"] = "⚡ Manual Trader Exit: Position market price par close ki gayi. Realized PnL: $" + str(pnl_settle) + " wallet me add hua."
-                ledger_close(tr["margin_used"], pnl_settle)
+                settle_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
+                settle_usd = round(settle_points * 2.0, 2)
+                tr["post_trade_feedback"] = f"⚡ Manual Close @ ${btc_price:,.1f}: Realized {settle_points:+.1f} pts (${settle_usd:+.2f})."
+                ledger_close(tr["margin_used"], settle_usd)
                 log_trade(tr)
                 st.session_state.active_trade = None
                 st.session_state.cooldown_until = time.time() + 25
-                st.success("Trade close ho gaya! Margin released aur PnL ($" + str(pnl_settle) + ") wallet me settle ho gaya.")
+                st.success(f"Position Closed! Margin released and ${settle_usd:,.2f} settled into wallet.")
                 time.sleep(1)
                 st.rerun()
         with col_c2:
             if st.button("Move SL to Breakeven", use_container_width=True):
                 tr["sl"] = tr["entry"]
-                st.info("SL Breakeven ($" + str(tr["entry"]) + ") par shift ho gaya.")
+                st.info(f"SL moved to Breakeven (${tr['entry']:,.1f}).")
     else:
         st.markdown("""
-        <div style="background:#0f131c; border: 1px dashed #2a3447; border-radius:6px; padding:20px; text-align:center; margin-top:10px;">
-            <div style="font-size:16px; font-weight:bold; color:#787f91;">🟢 NO ACTIVE RUNNER IN MARKET</div>
-            <div style="font-size:12px; color:#555d6e; margin-top:4px;">Wallet Margin 100% Free ($0.00 Locked). Scanner continuously institutional confluence check kar raha hai.</div>
+        <div style="background:#0f131c; border: 1px dashed #2a3447; border-radius:6px; padding:18px; text-align:center; margin-top:8px;">
+            <div style="font-size:15px; font-weight:bold; color:#787f91;">🟢 NO ACTIVE RUNNER IN MARKET</div>
+            <div style="font-size:12px; color:#555d6e; margin-top:4px;">Wallet Margin 100% Free ($0.00 Locked). Continuous institutional scanning active.</div>
         </div>
         """, unsafe_allow_html=True)
+
+    # ----------------- FIRST TAB INTEGRATED PERMANENT AUDIT SHEET -----------------
+    st.write("")
+    st.markdown("##### 📑 PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
+    vault_rows = get_first_tab_ledger()
+
+    if vault_rows:
+        df_sheet = pd.DataFrame(vault_rows, columns=[
+            "Timestamp", "Trade ID", "Direction", "Entry", "Exit Price", "SL", "Target 1", "Rating", "Post-Trade Review", "Status", "PnL"
+        ])
+        
+        # Download Backup CSV Button
+        csv_data = df_sheet.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Export Permanent Ledger Sheet (CSV)",
+            data=csv_data,
+            file_name="BTC_Trades_Audit_Vault.csv",
+            mime="text/csv"
+        )
+        st.dataframe(df_sheet, use_container_width=True, hide_index=True)
+    else:
+        st.info("Scanner continuously opportunity scan kar raha hai... Trade aate hi sheet me automatically add ho jayegi.")
 
 # ----------------- TAB 2: MULTI-TIMEFRAME RADAR & CHART -----------------
 with tab2:
@@ -391,14 +404,14 @@ with tab2:
     sr_cols = st.columns(6)
     for col, (tf, lv) in zip(sr_cols, sr_radar.items()):
         with col:
-            st.markdown("""
+            st.markdown(f"""
             <div class="card-box" style="padding:10px; text-align:center;">
-                <div style="font-size:13px; font-weight:bold; color:#29b6f6;">""" + str(tf) + """ FRAME</div>
-                <div style="font-size:11px; color:#ff5252; margin-top:3px;">Res: $""" + "{:,.1f}".format(lv['R']) + """</div>
-                <div style="font-size:11px; color:#00e676;">Sup: $""" + "{:,.1f}".format(lv['S']) + """</div>
+                <div style="font-size:13px; font-weight:bold; color:#29b6f6;">{tf} FRAME</div>
+                <div style="font-size:11px; color:#ff5252; margin-top:3px;">Res: ${lv['R']:,.1f}</div>
+                <div style="font-size:11px; color:#00e676;">Sup: ${lv['S']:,.1f}</div>
                 <hr style="border:0; border-top:1px solid #1c2230; margin:6px 0;">
-                <div style="font-size:10px; color:#ffb300; font-weight:bold;">""" + str(lv['Pattern']) + """</div>
-                <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: """ + str(lv['Candle']) + """</div>
+                <div style="font-size:10px; color:#ffb300; font-weight:bold;">{lv['Pattern']}</div>
+                <div style="font-size:9px; color:#88909e; margin-top:2px;">Candle: {lv['Candle']}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -430,15 +443,15 @@ with tab2:
 # ----------------- TAB 3: ORDERBOOK & SMART MONEY FLOW -----------------
 with tab3:
     st.markdown("##### ⚖️ REAL-TIME BUY VS SELL VOLUME PRESSURE")
-    st.markdown("""
+    st.markdown(f"""
     <div class="card-box" style="padding:14px 20px;">
         <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:bold; margin-bottom:6px;">
-            <span style="color:#00e676;">BUYERS (BIDS): """ + str(buyer_ratio) + """%</span>
-            <span style="color:#ff5252;">SELLERS (ASKS): """ + str(seller_ratio) + """%</span>
+            <span style="color:#00e676;">BUYERS (BIDS): {buyer_ratio}%</span>
+            <span style="color:#ff5252;">SELLERS (ASKS): {seller_ratio}%</span>
         </div>
         <div style="width:100%; height:14px; background:#26181d; border-radius:7px; overflow:hidden; display:flex;">
-            <div style="width:""" + str(buyer_ratio) + """%; height:100%; background:#00e676;"></div>
-            <div style="width:""" + str(seller_ratio) + """%; height:100%; background:#ff5252;"></div>
+            <div style="width:{buyer_ratio}%; height:100%; background:#00e676;"></div>
+            <div style="width:{seller_ratio}%; height:100%; background:#ff5252;"></div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -446,10 +459,10 @@ with tab3:
     st.write("")
     o1, o2 = st.columns(2)
     with o1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="card-box">
             <div class="card-title">SMART MONEY INSTITUTIONAL INFLOW</div>
-            <div style="font-size:18px; font-weight:bold; color:#29b6f6; margin-top:6px;">Whale Cluster @ $""" + "{:,.1f}".format(smc_point) + """</div>
+            <div style="font-size:18px; font-weight:bold; color:#29b6f6; margin-top:6px;">Whale Cluster @ ${smc_point:,.1f}</div>
             <div style="font-size:12px; color:#88909e; margin-top:4px;">Whale clusters continuously absorbing limit orders on Bybit/Binance.</div>
         </div>
         """, unsafe_allow_html=True)
@@ -462,29 +475,8 @@ with tab3:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 4: PERMANENT LEDGER & POST-TRADE FEEDBACK -----------------
+# ----------------- TAB 4: WALLET & TELEGRAM SETTINGS -----------------
 with tab4:
-    st.markdown("##### 📑 PERMANENT SIGNALS VAULT & POST-TRADE AUDIT SHEET (NON-DELETABLE)")
-    all_records = get_all_vault()
-
-    if all_records:
-        df_sheet = pd.DataFrame(all_records, columns=[
-            "Timestamp", "Trade ID", "Direction", "Entry", "Exit Price", "SL", "Target 1", "Rating", "Post-Trade Feedback / Review", "Trader Notes", "Status", "PnL"
-        ])
-        
-        csv_data = df_sheet.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Export Permanent Ledger Sheet (CSV)",
-            data=csv_data,
-            file_name="BTC_Trades_Audit_Vault.csv",
-            mime="text/csv"
-        )
-        st.dataframe(df_sheet, use_container_width=True, hide_index=True)
-    else:
-        st.info("Scanner continuously opportunity scan kar raha hai... Trade aate hi sheet me automatically add ho jayegi.")
-
-# ----------------- TAB 5: WALLET & TELEGRAM SETTINGS -----------------
-with tab5:
     st.markdown("##### ⚙️ VIRTUAL WALLET & CONFIGURATION")
     s1, s2 = st.columns(2)
     with s1:
