@@ -271,11 +271,10 @@ if "auto_trade_enabled" not in st.session_state:
 if "selected_trailing_mode" not in st.session_state:
     st.session_state.selected_trailing_mode = "ATR Multiplier Trailing (1.5x)"
 
-# ----------------- QUANT, REGIME & SCORING MATRIX (SECTIONS 1, 6, 7, 30) -----------------
+# ----------------- QUANT, REGIME & SCORING MATRIX -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
-# Section 6 & 7: 11 Granular Input Weights
 compression_input = random.randint(70, 95)
 defense_input = random.randint(75, 98)
 sell_fade_input = random.randint(65, 90)
@@ -310,7 +309,6 @@ distribution_score = min(95, max(10, distribution_score))
 accumulation_state = "ACCUMULATION WATCH (Active Whale Defense)" if accumulation_score >= 65 else "NEUTRAL ABSORPTION"
 distribution_state = "DISTRIBUTION WATCH (Supply Dumping)" if distribution_score >= 65 else "LOW DISTRIBUTION PRESSURE"
 
-# Range & Boundary Detection (Section 4)
 range_high = round(btc_price + 380.0, 1)
 range_low = round(btc_price - 340.0, 1)
 range_midpoint = round((range_high + range_low) / 2.0, 1)
@@ -323,7 +321,6 @@ boundary_zone_status = "BOUNDARY EDGE (HIGH QUALITY)" if is_near_boundary else "
 breakout_status = "BREAKOUT WATCH (Compressing below Range High)" if dist_to_high <= 90.0 else "RANGE EXPANSION"
 reversal_status = "REVERSAL WATCH (Bearish Transition Alert)" if seller_ratio > 48.0 else "NO REVERSAL DETECTED"
 
-# Weighted Confluence Score (Section 30)
 score_structure = random.randint(78, 92)
 score_volume_delta = random.randint(80, 95)
 score_momentum = random.randint(72, 88)
@@ -349,7 +346,6 @@ regimes = [
 ]
 current_regime = regimes[0] if buyer_ratio > 58 else regimes[2] if 48 <= buyer_ratio <= 58 else regimes[1]
 
-# Dynamic Move Classification (Section 12 & 13)
 atr_14 = round(random.uniform(340.0, 520.0), 1)
 move_classes = [
     ("Small Move", "+500 to +1,000 pts (Est. Prob: 76%)", 1.5),
@@ -359,7 +355,6 @@ move_classes = [
 ]
 active_move_type, active_move_desc, move_mult = move_classes[2]
 
-# Granular Zones (Sections 14 & 15)
 early_entry_zone = "$" + "{:,.1f}".format(btc_price - 40.0) + " - $" + "{:,.1f}".format(btc_price + 20.0)
 confirmation_entry = "Above $" + "{:,.1f}".format(btc_price + 85.0)
 retest_entry_zone = "$" + "{:,.1f}".format(btc_price - 80.0) + " - $" + "{:,.1f}".format(btc_price - 50.0)
@@ -413,7 +408,6 @@ if st.session_state.active_trade:
     tr["mfe_pts"] = max(tr.get("mfe_pts", 0.0), cur_pnl)
     tr["mae_pts"] = min(tr.get("mae_pts", 0.0), cur_pnl)
 
-    # Dynamic Trailing Stop Mode (Section 21)
     if "selected_trailing_mode" in st.session_state:
         tr["trailing_mode"] = st.session_state.selected_trailing_mode
         if "ATR" in tr["trailing_mode"] and cur_pnl >= 200.0:
@@ -673,7 +667,6 @@ with tab1:
             st.session_state.last_auto_scan = 0
             st.rerun()
 
-    # Active Position Runner Card
     if st.session_state.active_trade:
         tr = st.session_state.active_trade
         diff_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
@@ -886,6 +879,22 @@ with tab2:
             <div style="font-size:10px; color:#787f91;">Catastrophic liquidation / cascade threshold.</div>
         </div>
         """, unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("###### 📊 6-Stage Lifecycle State Model")
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    with s1:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 1</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Accumulation</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Score: 84/100</div></div>""", unsafe_allow_html=True)
+    with s2:
+        st.markdown("""<div class="card-box" style="text-align:center; border: 1px solid #00e676;"><div style="font-size:11px; color:#00e676;">STAGE 2 (ACTIVE)</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Early Setup</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Delta Reversal</div></div>""", unsafe_allow_html=True)
+    with s3:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 3</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Momentum Conf.</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Volume Surge</div></div>""", unsafe_allow_html=True)
+    with s4:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 4</div><div style="font-weight:bold; color:#ffb300; font-size:12px;">Trade Confirmed</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Retest Pass</div></div>""", unsafe_allow_html=True)
+    with s5:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 5</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Move / Targets</div><div style="font-size:10px; color:#88909e; margin-top:2px;">T1 -> T2 -> T3</div></div>""", unsafe_allow_html=True)
+    with s6:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#ff5252; font-size:12px;">Exhaustion Exit</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Reversal Watch</div></div>""", unsafe_allow_html=True)
 
 # ----------------- TAB 3: STAGE 4 CONFIRMED SETUP MATRIX -----------------
 with tab3:
@@ -1184,7 +1193,7 @@ with tab10:
             conn.close()
 
             if t_data:
-                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " \vert{} T2: $" + "{:,.1f}".format(t_data[7])
+                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " | T2: $" + "{:,.1f}".format(t_data[7])
                 events_list = json.loads(t_data[16]) if t_data[16] else []
                 timeline_html = "".join([f'<div class="timeline-node" style="color:#d1d4dc;">{ev}</div>' for ev in events_list])
 
