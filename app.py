@@ -9,17 +9,21 @@ import random
 import time
 import streamlit.components.v1 as components
 
-st.set_page_config(layout="wide", page_title="BTC Institutional Intelligence Terminal", initial_sidebar_state="collapsed")
+st.set_page_config(
+    layout="wide",
+    page_title="BTC Institutional Intelligence Terminal",
+    initial_sidebar_state="collapsed"
+)
 
-# Custom Dark Styling
+# Custom Institutional Dark CSS Styling
 st.markdown("""
 <style>
     .stApp { background-color: #07090e; color: #d1d4dc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
-    .card-box { background: #0f131c; border: 1px solid #1c2230; border-radius: 6px; padding: 12px; }
+    .card-box { background: #0f131c; border: 1px solid #1c2230; border-radius: 6px; padding: 12px; margin-bottom: 8px; }
     .card-title { font-size: 11px; color: #787f91; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
     .card-val { font-size: 20px; font-weight: 700; margin-top: 3px; }
     .status-badge { padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; display: inline-block; }
-    .timeline-node { border-left: 2px solid #29b6f6; padding-left: 12px; margin-bottom: 8px; font-size: 11px; }
+    .timeline-node { border-left: 2px solid #29b6f6; padding-left: 12px; margin-bottom: 8px; font-size: 11px; line-height: 1.4; }
     .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 1px solid #1c2230; }
     .stTabs [data-baseweb="tab"] { background-color: #0f131c; border-radius: 4px 4px 0 0; padding: 8px 16px; color: #88909e; font-weight: 600; }
     .stTabs [aria-selected="true"] { background-color: #1a2233 !important; color: #00e676 !important; font-weight: bold; border-bottom: 2px solid #00e676; }
@@ -27,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- LIVE DYNAMIC PRICE FETCH -----------------
+# ----------------- LIVE DYNAMIC PRICE & FEED INGESTION (SECTION 34) -----------------
 feed_latency_ms = random.randint(18, 42)
 api_feed_source = "Binance Direct WebSocket"
 
@@ -35,12 +39,12 @@ def fetch_btc_live():
     global api_feed_source
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=1.0)
-        api_feed_source = "Binance Primary Feed"
+        api_feed_source = "Binance Primary REST"
         return round(float(r.json()["price"]), 2)
     except Exception:
         try:
             r = requests.get("https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT", timeout=1.0)
-            api_feed_source = "Bybit Backup Feed"
+            api_feed_source = "Bybit Backup Linear"
             return round(float(r.json()["result"]["list"][0]["lastPrice"]), 2)
         except Exception:
             api_feed_source = "Synthetic Failover Feed"
@@ -48,7 +52,7 @@ def fetch_btc_live():
 
 btc_price = fetch_btc_live()
 
-# ----------------- DATABASE ARCHITECTURE -----------------
+# ----------------- DATABASE ARCHITECTURE & PERSISTENT LEDGER -----------------
 DB_FILE = "trades_vault.db"
 
 def init_db():
@@ -164,7 +168,7 @@ def get_first_tab_ledger():
         c = conn.cursor()
         c.execute("""
             SELECT timestamp, trade_id, direction, entry, exit_price, sl, target_1, market_regime, move_classification, booked_partial_pnl, is_user_taken, quality_rating, user_feedback, post_trade_feedback, status, pnl
-            FROM trades ORDER BY rowid DESC LIMIT 30
+            FROM trades ORDER BY rowid DESC LIMIT 40
         """)
         rows = c.fetchall()
         conn.close()
@@ -220,7 +224,7 @@ def update_user_feedback(trade_id, feedback, actual_entry, actual_exit, comment)
     except Exception:
         pass
 
-# ----------------- TELEGRAM DISPATCH WITH DEDUPLICATION -----------------
+# ----------------- TELEGRAM DISPATCH WITH DEDUPLICATION (SECTION 39) -----------------
 CONFIG_FILE = "config.json"
 
 def send_telegram(msg, reply_markup=None):
@@ -251,7 +255,7 @@ def deduplicate_and_send_alert(tr, event_type, msg, buttons=None):
         tr["dispatched_events"].append(event_type)
         send_telegram(msg, buttons)
 
-# ----------------- SESSION STATE -----------------
+# ----------------- SESSION STATE ENGINE -----------------
 if "active_trade" not in st.session_state:
     st.session_state.active_trade = None
 
@@ -267,18 +271,46 @@ if "auto_trade_enabled" not in st.session_state:
 if "selected_trailing_mode" not in st.session_state:
     st.session_state.selected_trailing_mode = "ATR Multiplier Trailing (1.5x)"
 
-# ----------------- QUANT, REGIME & SCORING MATRIX -----------------
+# ----------------- QUANT, REGIME & SCORING MATRIX (SECTIONS 1, 6, 7, 30) -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
-accumulation_score = int((buyer_ratio * 0.8) + random.uniform(15.0, 26.0))
-accumulation_score = min(98, max(15, accumulation_score))
-distribution_score = int((seller_ratio * 0.8) + random.uniform(5.0, 18.0))
+# Section 6 & 7: 11 Granular Input Weights
+compression_input = random.randint(70, 95)
+defense_input = random.randint(75, 98)
+sell_fade_input = random.randint(65, 90)
+buy_surge_input = random.randint(70, 94)
+vol_anomaly_input = random.randint(68, 88)
+orderflow_delta_input = random.randint(75, 96)
+open_interest_input = random.randint(60, 85)
+failed_breakdown_input = random.randint(80, 98)
+higher_lows_input = random.randint(74, 92)
+liquidity_pool_input = random.randint(70, 90)
+
+accumulation_score = int(
+    (compression_input * 0.10) +
+    (defense_input * 0.15) +
+    (sell_fade_input * 0.10) +
+    (buy_surge_input * 0.15) +
+    (orderflow_delta_input * 0.15) +
+    (failed_breakdown_input * 0.15) +
+    (higher_lows_input * 0.10) +
+    (liquidity_pool_input * 0.10)
+)
+accumulation_score = min(98, max(20, accumulation_score))
+
+distribution_score = int(
+    ((100 - buy_surge_input) * 0.20) +
+    ((100 - defense_input) * 0.20) +
+    (seller_ratio * 0.30) +
+    (random.randint(10, 30) * 0.30)
+)
 distribution_score = min(95, max(10, distribution_score))
 
 accumulation_state = "ACCUMULATION WATCH (Active Whale Defense)" if accumulation_score >= 65 else "NEUTRAL ABSORPTION"
 distribution_state = "DISTRIBUTION WATCH (Supply Dumping)" if distribution_score >= 65 else "LOW DISTRIBUTION PRESSURE"
 
+# Range & Boundary Detection (Section 4)
 range_high = round(btc_price + 380.0, 1)
 range_low = round(btc_price - 340.0, 1)
 range_midpoint = round((range_high + range_low) / 2.0, 1)
@@ -291,6 +323,7 @@ boundary_zone_status = "BOUNDARY EDGE (HIGH QUALITY)" if is_near_boundary else "
 breakout_status = "BREAKOUT WATCH (Compressing below Range High)" if dist_to_high <= 90.0 else "RANGE EXPANSION"
 reversal_status = "REVERSAL WATCH (Bearish Transition Alert)" if seller_ratio > 48.0 else "NO REVERSAL DETECTED"
 
+# Weighted Confluence Score (Section 30)
 score_structure = random.randint(78, 92)
 score_volume_delta = random.randint(80, 95)
 score_momentum = random.randint(72, 88)
@@ -316,6 +349,7 @@ regimes = [
 ]
 current_regime = regimes[0] if buyer_ratio > 58 else regimes[2] if 48 <= buyer_ratio <= 58 else regimes[1]
 
+# Dynamic Move Classification (Section 12 & 13)
 atr_14 = round(random.uniform(340.0, 520.0), 1)
 move_classes = [
     ("Small Move", "+500 to +1,000 pts (Est. Prob: 76%)", 1.5),
@@ -325,6 +359,7 @@ move_classes = [
 ]
 active_move_type, active_move_desc, move_mult = move_classes[2]
 
+# Granular Zones (Sections 14 & 15)
 early_entry_zone = "$" + "{:,.1f}".format(btc_price - 40.0) + " - $" + "{:,.1f}".format(btc_price + 20.0)
 confirmation_entry = "Above $" + "{:,.1f}".format(btc_price + 85.0)
 retest_entry_zone = "$" + "{:,.1f}".format(btc_price - 80.0) + " - $" + "{:,.1f}".format(btc_price - 50.0)
@@ -378,6 +413,7 @@ if st.session_state.active_trade:
     tr["mfe_pts"] = max(tr.get("mfe_pts", 0.0), cur_pnl)
     tr["mae_pts"] = min(tr.get("mae_pts", 0.0), cur_pnl)
 
+    # Dynamic Trailing Stop Mode (Section 21)
     if "selected_trailing_mode" in st.session_state:
         tr["trailing_mode"] = st.session_state.selected_trailing_mode
         if "ATR" in tr["trailing_mode"] and cur_pnl >= 200.0:
@@ -851,23 +887,7 @@ with tab2:
         </div>
         """, unsafe_allow_html=True)
 
-    st.write("")
-    st.markdown("###### 📊 6-Stage Lifecycle State Model")
-    s1, s2, s3, s4, s5, s6 = st.columns(6)
-    with s1:
-        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 1</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Accumulation</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Score: 84/100</div></div>""", unsafe_allow_html=True)
-    with s2:
-        st.markdown("""<div class="card-box" style="text-align:center; border: 1px solid #00e676;"><div style="font-size:11px; color:#00e676;">STAGE 2 (ACTIVE)</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Early Setup</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Delta Reversal</div></div>""", unsafe_allow_html=True)
-    with s3:
-        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 3</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Momentum Conf.</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Volume Surge</div></div>""", unsafe_allow_html=True)
-    with s4:
-        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 4</div><div style="font-weight:bold; color:#ffb300; font-size:12px;">Trade Confirmed</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Retest Pass</div></div>""", unsafe_allow_html=True)
-    with s5:
-        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 5</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Move / Targets</div><div style="font-size:10px; color:#88909e; margin-top:2px;">T1 -> T2 -> T3</div></div>""", unsafe_allow_html=True)
-    with s6:
-        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#ff5252; font-size:12px;">Exhaustion Exit</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Reversal Watch</div></div>""", unsafe_allow_html=True)
-
-# ----------------- TAB 3: STAGE 4 CONFIRMED SETUP MATRIX (SECTIONS 10 & 11) -----------------
+# ----------------- TAB 3: STAGE 4 CONFIRMED SETUP MATRIX -----------------
 with tab3:
     st.markdown("##### 🚀 STAGE 4: TRADE CONFIRMED EXECUTION SUITE (SECTIONS 10 & 11)")
     st.caption("Triggered only after momentum confirmation and retest validation succeed.")
@@ -903,7 +923,7 @@ with tab3:
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------- TAB 4: SYSTEM OUTCOME VS USER OUTCOME AUDIT (SECTION 39.12) -----------------
+# ----------------- TAB 4: SYSTEM OUTCOME VS USER OUTCOME AUDIT -----------------
 with tab4:
     st.markdown("##### ⚖️ SYSTEM THEORETICAL OUTCOME VS USER ACTUAL OUTCOME (SECTION 39.12)")
     st.caption("Separates algorithmic performance from human execution slippage and psychological exits.")
@@ -1004,35 +1024,7 @@ with tab6:
         </div>
         """, unsafe_allow_html=True)
 
-    st.write("")
-    st.markdown("###### ⚡ Transition State Machine Status (Sections 5 & 29)")
-    tr_col1, tr_col2 = st.columns(2)
-    with tr_col1:
-        st.markdown(f"""
-        <div class="card-box" style="border-left: 4px solid #ffb300;">
-            <div class="card-title">BREAKOUT TRANSITION MONITOR (SECTION 5)</div>
-            <div style="font-size:16px; font-weight:bold; color:#ffb300; margin-top:4px;">{breakout_status}</div>
-            <div style="font-size:11px; color:#88909e; margin-top:4px; line-height:1.5;">
-                • Volume Expansion Filter: Required 1.8x average volume<br>
-                • Price Acceptance: Candle close required outside boundary<br>
-                • False Breakout Filter: Active (Trap invalidation engaged)
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with tr_col2:
-        st.markdown(f"""
-        <div class="card-box" style="border-left: 4px solid #ab47bc;">
-            <div class="card-title">TREND REVERSAL DETECTOR (SECTION 29)</div>
-            <div style="font-size:16px; font-weight:bold; color:#ab47bc; margin-top:4px;">{reversal_status}</div>
-            <div style="font-size:11px; color:#88909e; margin-top:4px; line-height:1.5;">
-                • Structure Pivot Breakdown: Monitoring higher-low defense<br>
-                • CVD Imbalance Divergence: Neutral to positive absorption<br>
-                • Action State: Probabilistic warning rather than guaranteed call
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-# ----------------- TAB 7: TRAILING-STOP MODES (SECTION 21) -----------------
+# ----------------- TAB 7: TRAILING-STOP MODES -----------------
 with tab7:
     st.markdown("##### 🛡️ 5-TIER DYNAMIC TRAILING-STOP METHODOLOGY (SECTION 21)")
     st.caption("Customize how running positions trail stop-loss to maximize runner expansion.")
@@ -1130,15 +1122,6 @@ with tab8:
         </div>
         """, unsafe_allow_html=True)
 
-    st.write("")
-    st.markdown(f"""
-    <div class="card-box" style="border-left: 4px solid #00e676; text-align:center; padding:16px;">
-        <div style="font-size:12px; color:#88909e; font-weight:bold;">OVERALL WEIGHTED CONFLUENCE SCORE</div>
-        <div style="font-size:32px; font-weight:bold; color:#00e676; margin-top:4px;">{weighted_setup_score} / 100</div>
-        <div style="font-size:11px; color:#787f91; margin-top:4px;">Institutional Quality: Grade A Early Execution Setup (Threshold: >= 75)</div>
-    </div>
-    """, unsafe_allow_html=True)
-
 # ----------------- TAB 9: FALSE-SIGNAL FILTER AUDIT -----------------
 with tab9:
     st.markdown("##### 🛡️ 10-PILLAR FALSE-SIGNAL & TRAP FILTER AUDIT")
@@ -1201,7 +1184,7 @@ with tab10:
             conn.close()
 
             if t_data:
-                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " | T2: $" + "{:,.1f}".format(t_data[7])
+                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " \vert{} T2: $" + "{:,.1f}".format(t_data[7])
                 events_list = json.loads(t_data[16]) if t_data[16] else []
                 timeline_html = "".join([f'<div class="timeline-node" style="color:#d1d4dc;">{ev}</div>' for ev in events_list])
 
