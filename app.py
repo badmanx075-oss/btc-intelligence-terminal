@@ -16,6 +16,22 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ----------------- SESSION STATE ENGINE (TOP PRIORITY INITIALIZATION) -----------------
+if "active_trade" not in st.session_state:
+    st.session_state["active_trade"] = None
+
+if "last_auto_scan" not in st.session_state:
+    st.session_state["last_auto_scan"] = time.time()
+
+if "cooldown_until" not in st.session_state:
+    st.session_state["cooldown_until"] = 0
+
+if "auto_trade_enabled" not in st.session_state:
+    st.session_state["auto_trade_enabled"] = True
+
+if "selected_trailing_mode" not in st.session_state:
+    st.session_state["selected_trailing_mode"] = "ATR Multiplier Trailing (1.5x)"
+
 # Custom Institutional Dark CSS Styling
 st.markdown("""
 <style>
@@ -115,7 +131,7 @@ accumulation_score, distribution_score = calculate_accumulation_distribution(df_
 accumulation_state = "ACCUMULATION WATCH (Active Whale Defense)" if accumulation_score >= 60 else "NEUTRAL ABSORPTION"
 distribution_state = "DISTRIBUTION WATCH (Supply Dumping)" if distribution_score >= 60 else "LOW SELLING PRESSURE"
 
-# ----------------- SECTION 1: DETERMINISTIC MULTI-TIMEFRAME REGIME (SECTION 1 & 27) -----------------
+# ----------------- SECTION 1: DETERMINISTIC MULTI-TIMEFRAME REGIME -----------------
 if df_4h is not None and df_1h is not None and len(df_4h) >= 10:
     sma_4h = df_4h["close"].tail(10).mean()
     sma_1h = df_1h["close"].tail(10).mean()
@@ -150,12 +166,12 @@ boundary_zone_status = "BOUNDARY EDGE (HIGH QUALITY EVIDENCE)" if is_near_bounda
 breakout_status = "BREAKOUT WATCH (Compressing below Range High)" if dist_to_high <= 80.0 else "RANGE EXPANSION"
 reversal_status = "REVERSAL WATCH (Bearish Transition Alert)" if seller_ratio > 52.0 else "NO REVERSAL DETECTED"
 
-# ----------------- SECTION 12 & 13: POINT-MOVE & EXPECTED MOVE (DYNAMIC CALCULATION) -----------------
+# ----------------- SECTION 12 & 13: POINT-MOVE & EXPECTED MOVE -----------------
 move_classes = [
-    ("Small Move", f"+500 to +1,000 pts (ATR Multiplier: 1.5x)", round(atr_14 * 1.5, 1)),
-    ("Medium Move", f"+1,000 to +2,000 pts (ATR Multiplier: 3.0x)", round(atr_14 * 3.0, 1)),
-    ("Large Move", f"+2,000 to +5,000 pts (ATR Multiplier: 6.0x)", round(atr_14 * 6.0, 1)),
-    ("Extended Move", f"+5,000 to +10,000+ pts (ATR Multiplier: 12.0x)", round(atr_14 * 12.0, 1))
+    ("Small Move", "+500 to +1,000 pts (ATR Multiplier: 1.5x)", round(atr_14 * 1.5, 1)),
+    ("Medium Move", "+1,000 to +2,000 pts (ATR Multiplier: 3.0x)", round(atr_14 * 3.0, 1)),
+    ("Large Move", "+2,000 to +5,000 pts (ATR Multiplier: 6.0x)", round(atr_14 * 6.0, 1)),
+    ("Extended Move", "+5,000 to +10,000+ pts (ATR Multiplier: 12.0x)", round(atr_14 * 12.0, 1))
 ]
 active_move_type, active_move_desc, move_pts_calc = move_classes[2]
 
@@ -180,14 +196,13 @@ target_3_level = round(btc_price + (atr_14 * 4.50), 1)
 extended_target_level = round(btc_price + (atr_14 * 8.00), 1)
 est_holding_time = "45 - 90 mins (T1) | 2 - 4 hours (T2) | Multi-day (T3+)"
 
-# Dynamic Position Sizing Calculator (Section 30)
-account_risk_usd = 1000.0  # 1% standard equity risk
+account_risk_usd = 1000.0
 sl_distance_pts = max(50.0, abs(btc_price - preferred_sl))
 calculated_position_btc = round(account_risk_usd / sl_distance_pts, 3)
 
 weighted_setup_score = int(min(99, max(30, (accumulation_score * 0.40) + (buyer_ratio * 0.35) + (25 if is_near_boundary else 5))))
 
-# ----------------- DATABASE ARCHITECTURE & PERSISTENT LEDGER -----------------
+# ----------------- DATABASE ARCHITECTURE -----------------
 DB_FILE = "trades_vault.db"
 
 def init_db():
@@ -359,6 +374,36 @@ def update_user_feedback(trade_id, feedback, actual_entry, actual_exit, comment)
     except Exception:
         pass
 
+# ----------------- TELEGRAM PASS-THROUGH -----------------
+CONFIG_FILE = "config.json"
+def send_telegram(msg, reply_markup=None):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                d = json.load(f)
+                token = d.get("token", token)
+                chat_id = d.get("chat_id", chat_id)
+        except Exception:
+            pass
+    if token and chat_id:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            requests.post(url, json=payload, timeout=2.5)
+        except Exception:
+            pass
+
+def deduplicate_and_send_alert(tr, event_type, msg, buttons=None):
+    if "dispatched_events" not in tr:
+        tr["dispatched_events"] = []
+    if event_type not in tr["dispatched_events"]:
+        tr["dispatched_events"].append(event_type)
+        send_telegram(msg, buttons)
+
 # ----------------- SECTION 18-24: POSITION STATE MACHINE & SUSTAINABILITY -----------------
 position_status_msg = "NO POSITION"
 position_reason = "Scanner scanning opportunities..."
@@ -372,9 +417,12 @@ def append_timeline_event(tr, event_str):
     if not any(event_str in e for e in tr["timeline_events"]):
         tr["timeline_events"].append(formatted)
 
-if st.session_state.active_trade:
-    tr = st.session_state.active_trade
-    raw_points = btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price
+# SAFE ACCESS TO ACTIVE TRADE TO PREVENT KEYERROR / ATTRIBUTEERROR
+active_trade_obj = st.session_state.get("active_trade", None)
+
+if active_trade_obj is not None:
+    tr = active_trade_obj
+    raw_points = btc_price - tr["entry"] if tr.get("direction") == "LONG" else tr["entry"] - btc_price
     cur_pnl = round(raw_points, 1)
     tr["pnl"] = cur_pnl
 
@@ -382,9 +430,10 @@ if st.session_state.active_trade:
     tr["mae_pts"] = min(tr.get("mae_pts", 0.0), cur_pnl)
 
     # Section 21 Trailing-Stop Logic
-    if "ATR" in st.session_state.selected_trailing_mode and cur_pnl >= 200.0:
-        calc_trail = round(btc_price - (atr_14 * 0.40), 1) if tr["direction"] == "LONG" else round(btc_price + (atr_14 * 0.40), 1)
-        if (tr["direction"] == "LONG" and calc_trail > tr["sl"]) or (tr["direction"] == "SHORT" and calc_trail < tr["sl"]):
+    sel_trail_mode = st.session_state.get("selected_trailing_mode", "ATR Multiplier Trailing (1.5x)")
+    if "ATR" in sel_trail_mode and cur_pnl >= 200.0:
+        calc_trail = round(btc_price - (atr_14 * 0.40), 1) if tr.get("direction") == "LONG" else round(btc_price + (atr_14 * 0.40), 1)
+        if (tr.get("direction") == "LONG" and calc_trail > tr.get("sl", 0.0)) or (tr.get("direction") == "SHORT" and calc_trail < tr.get("sl", 0.0)):
             tr["sl"] = calc_trail
             append_timeline_event(tr, f"ATR Dynamic Trailing Shifted SL to ${calc_trail:,.1f}")
 
@@ -397,10 +446,14 @@ if st.session_state.active_trade:
         position_reason = "Target 1 hit (+350 to +500 pts). Continuation conditions supportive relative to tested alternatives."
         hold_vs_book_verdict = f"Book 25-30% partial profit. Trail remaining to Breakeven (${tr['entry']:,.1f})."
         append_timeline_event(tr, "Target 1 Hit. Trailing Stop Moved to Breakeven")
-        if tr["direction"] == "LONG" and tr["sl"] < tr["entry"]:
+        if tr.get("direction") == "LONG" and tr.get("sl", 0.0) < tr.get("entry", 0.0):
             tr["sl"] = tr["entry"]
-        elif tr["direction"] == "SHORT" and tr["sl"] > tr["entry"]:
+        elif tr.get("direction") == "SHORT" and tr.get("sl", 0.0) > tr.get("entry", 0.0):
             tr["sl"] = tr["entry"]
+        deduplicate_and_send_alert(
+            tr, "TARGET_1_HIT",
+            f"🎯 *TARGET 1 HIT!*\nTrade ID: `{tr['trade_id']}`\nT1: ${tr.get('target_1', 0.0):,.1f}\nStop locked to Breakeven: ${tr['entry']:,.1f}"
+        )
     elif cur_pnl >= (atr_14 * 0.35):
         position_status_msg = "🟢 HOLD — MOMENTUM STRONG"
         position_reason = "Structure remains intact. Buying/selling pressure supportive. No major exhaustion detected."
@@ -417,7 +470,7 @@ if st.session_state.active_trade:
         hold_vs_book_verdict = "Hold position. Thesis intact. Allow setup to mature."
 
     # Auto-Close on Targets / SL
-    if (tr["direction"] == "LONG" and btc_price >= tr["target_2"]) or (tr["direction"] == "SHORT" and btc_price <= tr["target_2"]):
+    if (tr.get("direction") == "LONG" and btc_price >= tr.get("target_2", 999999.0)) or (tr.get("direction") == "SHORT" and btc_price <= tr.get("target_2", -999999.0)):
         tr["status"] = "CLOSED (TARGET 2 HIT)"
         tr["exit_price"] = btc_price
         append_timeline_event(tr, f"Target 2 Hit @ ${btc_price:,.1f}. Position fully closed")
@@ -426,29 +479,28 @@ if st.session_state.active_trade:
         tr["post_trade_feedback"] = "Target 2 Full Hit. Extended Move Runner Captured."
         ledger_close(rem_margin, final_profit)
         log_trade(tr)
-        st.session_state.active_trade = None
-        st.session_state.cooldown_until = time.time() + 20
+        st.session_state["active_trade"] = None
+        st.session_state["cooldown_until"] = time.time() + 20
         st.rerun()
 
-    elif (tr["direction"] == "LONG" and btc_price <= tr["sl"]) or (tr["direction"] == "SHORT" and btc_price >= tr["sl"]):
+    elif (tr.get("direction") == "LONG" and btc_price <= tr.get("sl", -999999.0)) or (tr.get("direction") == "SHORT" and btc_price >= tr.get("sl", 999999.0)):
         tr["status"] = "CLOSED (SL HIT)"
         tr["exit_price"] = btc_price
         append_timeline_event(tr, f"Stop-Loss Triggered @ ${btc_price:,.1f}")
         rem_margin = tr.get("remaining_margin", 2500.0)
-        loss = -360.0 if tr["sl"] != tr["entry"] else 0.0
+        loss = -360.0 if tr.get("sl") != tr.get("entry") else 0.0
         tr["post_trade_feedback"] = "SL Invalidation Hit. Capital preserved via tight buffer."
         ledger_close(rem_margin, loss)
         log_trade(tr)
-        st.session_state.active_trade = None
-        st.session_state.cooldown_until = time.time() + 15
+        st.session_state["active_trade"] = None
+        st.session_state["cooldown_until"] = time.time() + 15
         st.rerun()
 
 # Autonomous Early Opportunity Trigger (Section 8)
-elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.cooldown_until) and (time.time() - st.session_state.last_auto_scan > 6):
-    st.session_state.last_auto_scan = time.time()
+elif st.session_state.get("auto_trade_enabled", True) and (time.time() > st.session_state.get("cooldown_until", 0)) and (time.time() - st.session_state.get("last_auto_scan", 0) > 6):
+    st.session_state["last_auto_scan"] = time.time()
     bal, locked, _ = get_wallet()
     if bal >= 2500.0 and locked == 0.0:
-        # Strict Section 26 False Signal Filter Check
         can_trade = is_near_boundary and (accumulation_score >= 58 or distribution_score >= 58)
         if can_trade:
             dir_ch = "LONG" if buyer_ratio >= 50.0 else "SHORT"
@@ -494,7 +546,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
                 "move_classification": f"{active_move_type} ({active_move_desc})",
                 "mfe_pts": 0.0,
                 "mae_pts": 0.0,
-                "trailing_mode": st.session_state.selected_trailing_mode,
+                "trailing_mode": st.session_state.get("selected_trailing_mode", "ATR Multiplier Trailing (1.5x)"),
                 "breakout_state": breakout_status,
                 "reversal_state": reversal_status,
                 "accumulation_score": accumulation_score,
@@ -514,7 +566,7 @@ elif st.session_state.auto_trade_enabled and (time.time() > st.session_state.coo
             }
 
             ledger_open(margin)
-            st.session_state.active_trade = new_tr
+            st.session_state["active_trade"] = new_tr
             log_trade(new_tr)
             st.rerun()
 
@@ -530,8 +582,9 @@ with m3:
     p_col = "#00e676" if realized_pnl >= 0 else "#ff5252"
     st.markdown(f'<div class="card-box"><div class="card-title">REALIZED PnL</div><div class="card-val" style="color:{p_col};">${realized_pnl:,.2f}</div></div>', unsafe_allow_html=True)
 with m4:
-    pos_stat = "ACTIVE RUNNER" if st.session_state.active_trade else "SCANNING (NO OPEN POSITION)"
-    stat_clr = "#00e676" if st.session_state.active_trade else "#787f91"
+    has_pos = st.session_state.get("active_trade") is not None
+    pos_stat = "ACTIVE RUNNER" if has_pos else "SCANNING (NO OPEN POSITION)"
+    stat_clr = "#00e676" if has_pos else "#787f91"
     st.markdown(f'<div class="card-box"><div class="card-title">SYSTEM POSITION STATUS</div><div class="card-val" style="color:{stat_clr}; font-size:14px; margin-top:8px;">{pos_stat}</div></div>', unsafe_allow_html=True)
 
 st.write("")
@@ -559,10 +612,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
 # ----------------- TAB 1: ALL-IN-ONE TERMINAL -----------------
 with tab1:
     col_tape, col_action = st.columns([2, 1])
-    tr_active = st.session_state.active_trade
-    has_active_js = "true" if tr_active else "false"
-    entry_js = tr_active["entry"] if tr_active else 0.0
-    dir_js = tr_active["direction"] if tr_active else "LONG"
+    tr_curr = st.session_state.get("active_trade", None)
+    has_active_js = "true" if tr_curr else "false"
+    entry_js = tr_curr.get("entry", 0.0) if tr_curr else 0.0
+    dir_js = tr_curr.get("direction", "LONG") if tr_curr else "LONG"
 
     with col_tape:
         live_ticker_tape = f"""
@@ -603,13 +656,13 @@ with tab1:
     with col_action:
         st.write("")
         if st.button("Force Manual Opportunity Signal", use_container_width=True):
-            st.session_state.cooldown_until = 0
-            st.session_state.last_auto_scan = 0
+            st.session_state["cooldown_until"] = 0
+            st.session_state["last_auto_scan"] = 0
             st.rerun()
 
-    if st.session_state.active_trade:
-        tr = st.session_state.active_trade
-        diff_points = round(btc_price - tr["entry"] if tr["direction"] == "LONG" else tr["entry"] - btc_price, 2)
+    if tr_curr is not None:
+        tr = tr_curr
+        diff_points = round(btc_price - tr["entry"] if tr.get("direction") == "LONG" else tr["entry"] - btc_price, 2)
         pnl_clr = "#00e676" if diff_points >= 0 else "#ff5252"
         pnl_sign = "+" if diff_points >= 0 else ""
         usd_val = round(diff_points * 2.0, 2)
@@ -703,8 +756,8 @@ with tab1:
                 tr["post_trade_feedback"] = f"Manual Close @ ${btc_price:,.1f}: Realized {settle_points:+.1f} pts (${settle_usd:+.2f})."
                 ledger_close(tr.get("remaining_margin", 2500.0), settle_usd)
                 log_trade(tr)
-                st.session_state.active_trade = None
-                st.session_state.cooldown_until = time.time() + 25
+                st.session_state["active_trade"] = None
+                st.session_state["cooldown_until"] = time.time() + 25
                 st.success("Trade Fully Closed! Wallet updated.")
                 time.sleep(1)
                 st.rerun()
@@ -716,7 +769,6 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-    # Permanent Signals Sheet
     st.write("")
     st.markdown("##### PERMANENT SIGNALS VAULT & AUDIT SHEET (ALL ENTRIES)")
     vault_rows = get_first_tab_ledger()
@@ -817,6 +869,22 @@ with tab2:
             <div style="font-size:10px; color:#787f91;">Catastrophic liquidation / cascade threshold.</div>
         </div>
         """, unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("###### 📊 6-Stage Lifecycle State Model (Section 28)")
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    with s1:
+        st.markdown(f"""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 1</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Accumulation</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Score: {accumulation_score}/100</div></div>""", unsafe_allow_html=True)
+    with s2:
+        st.markdown(f"""<div class="card-box" style="text-align:center; border: 1px solid #00e676;"><div style="font-size:11px; color:#00e676;">STAGE 2 (ACTIVE)</div><div style="font-weight:bold; color:#00e676; font-size:12px;">Early Setup</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Delta Reversal</div></div>""", unsafe_allow_html=True)
+    with s3:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 3</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Momentum Conf.</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Volume Surge</div></div>""", unsafe_allow_html=True)
+    with s4:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 4</div><div style="font-weight:bold; color:#ffb300; font-size:12px;">Trade Confirmed</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Retest Pass</div></div>""", unsafe_allow_html=True)
+    with s5:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#787f91;">STAGE 5</div><div style="font-weight:bold; color:#29b6f6; font-size:12px;">Move / Targets</div><div style="font-size:10px; color:#88909e; margin-top:2px;">T1 -> T2 -> T3</div></div>""", unsafe_allow_html=True)
+    with s6:
+        st.markdown("""<div class="card-box" style="text-align:center;"><div style="font-size:11px; color:#ff5252; font-size:12px;">Exhaustion Exit</div><div style="font-size:10px; color:#88909e; margin-top:2px;">Reversal Watch</div></div>""", unsafe_allow_html=True)
 
 # ----------------- TAB 3: STAGE 4 CONFIRMED SETUP MATRIX -----------------
 with tab3:
@@ -957,7 +1025,7 @@ with tab7:
         "Support/Resistance Step Trailing (Locking each S/R pivot cleared)",
         "Momentum-Decay Protection Trailing (Aggressive lock on volume divergence)"
     ]
-    st.session_state.selected_trailing_mode = st.radio("Select Active Trailing Methodology:", t_modes, index=0)
+    st.session_state["selected_trailing_mode"] = st.radio("Select Active Trailing Methodology:", t_modes, index=0)
 
     st.write("")
     tr1, tr2, tr3 = st.columns(3)
@@ -1079,8 +1147,8 @@ with tab10:
                     <div><strong>Trade ID:</strong> {t_data[1]} ({t_data[2]})</div>
                     <div><strong>Timestamp:</strong> {t_data[0]}</div>
                     <div><strong>Regime at Signal:</strong> <span style="color:#29b6f6;">{t_data[8]}</span></div>
-                    <div><strong>Theoretical Entry / SL:</strong> ${t_data[3]:,.1f} / ${t_data[5]:,.1f}</div>
-                    <div><strong>Targets:</strong> T1: ${t_data[6]:,.1f} | T2: ${t_data[7]:,.1f}</div>
+                    <div><strong>Theoretical Entry / SL:</strong> ${t_data[3]:,.1f} /${t_data[5]:,.1f}</div>
+                    <div><strong>Targets:</strong> T1: ${t_data[6]:,.1f} \vert{} T2:${t_data[7]:,.1f}</div>
                     <div><strong>Max Favorable Excursion (MFE):</strong> <span style="color:#00e676;">+{t_data[10]:,.1f} pts</span></div>
                     <div><strong>Max Adverse Excursion (MAE):</strong> <span style="color:#ff5252;">{t_data[11]:,.1f} pts</span></div>
                     <div><strong>System Reason:</strong> {t_data[12]}</div>
@@ -1107,7 +1175,7 @@ with tab11:
             <div style="font-size:11px; color:#d1d4dc; margin-top:4px; line-height:1.5;">
                 • <strong>Current Price:</strong> ${btc_price:,.2f}<br>
                 • <strong>Market Regime:</strong> {current_regime}<br>
-                • <strong>Key Support:</strong> ${preferred_sl:,.1f} | <strong>Resistance:</strong> ${btc_price + 680:,.1f}<br>
+                • <strong>Key Support:</strong> ${preferred_sl:,.1f} \vert{} <strong>Resistance:</strong>${btc_price + 680:,.1f}<br>
                 • <strong>Overnight Activity:</strong> Whale absorption defending lower boundaries.<br>
                 • <strong>Risk Reminder:</strong> Probabilistic statistical setups, NOT guaranteed predictions.
             </div>
@@ -1170,7 +1238,7 @@ with tab13:
     st.markdown("##### 🔍 27 REAL-TIME OPERATIONAL QUESTIONS LIVE AUDIT (SECTION 37)")
     qa_list = [
         ("1. What is the current market regime?", current_regime),
-        ("2. Is there an opportunity right now?", "YES - Early Opportunity Active in Scanner" if st.session_state.active_trade else "NO - Scanning Mode"),
+        ("2. Is there an opportunity right now?", "YES - Early Opportunity Active in Scanner" if st.session_state.get("active_trade") is not None else "NO - Scanning Mode"),
         ("3. Is it LONG, SHORT, RANGE, or NO TRADE?", "EARLY LONG SETUP" if buyer_ratio >= 50 else "EARLY SHORT SETUP"),
         ("4. Is the opportunity early or already late?", "EARLY SETUP (Entering near liquidity sweep base)"),
         ("5. What evidence supports it?", "CVD positive flip + demand defense + Bull Flag"),
@@ -1276,8 +1344,8 @@ with tab16:
         c.execute("UPDATE wallet SET balance=100000.0, locked_margin=0.0, realized_pnl=0.0 WHERE id=1")
         conn.commit()
         conn.close()
-        st.session_state.active_trade = None
-        st.session_state.cooldown_until = 0
+        st.session_state["active_trade"] = None
+        st.session_state["cooldown_until"] = 0
         st.success("Wallet successfully $100,000 par reset ho gaya!")
         time.sleep(1)
         st.rerun()
