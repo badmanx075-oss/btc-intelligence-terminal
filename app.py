@@ -267,7 +267,7 @@ if "auto_trade_enabled" not in st.session_state:
 if "selected_trailing_mode" not in st.session_state:
     st.session_state.selected_trailing_mode = "ATR Multiplier Trailing (1.5x)"
 
-# ----------------- ACCUMULATION & DISTRIBUTION ENGINES -----------------
+# ----------------- QUANT, REGIME & SCORING MATRIX -----------------
 buyer_ratio = round(random.uniform(55.0, 72.0), 1)
 seller_ratio = round(100.0 - buyer_ratio, 1)
 
@@ -334,7 +334,6 @@ hard_invalidation = round(btc_price - (atr_14 * 0.55), 1)
 preferred_sl = round(btc_price - (atr_14 * 0.42), 1)
 emergency_risk = round(btc_price - (atr_14 * 0.85), 1)
 
-# Confirmed Targets & Estimates (Sections 10 & 11)
 target_1_level = round(btc_price + (atr_14 * 0.9), 1)
 target_2_level = round(btc_price + (atr_14 * 2.2), 1)
 target_3_level = round(btc_price + (atr_14 * 4.5), 1)
@@ -1202,7 +1201,7 @@ with tab10:
             conn.close()
 
             if t_data:
-                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " \vert{} T2: $" + "{:,.1f}".format(t_data[7])
+                t_targets_text = "T1: $" + "{:,.1f}".format(t_data[6]) + " | T2: $" + "{:,.1f}".format(t_data[7])
                 events_list = json.loads(t_data[16]) if t_data[16] else []
                 timeline_html = "".join([f'<div class="timeline-node" style="color:#d1d4dc;">{ev}</div>' for ev in events_list])
 
@@ -1418,7 +1417,6 @@ with tab15:
 with tab16:
     st.markdown("##### ⚙️ VIRTUAL WALLET, API HEALTH & TELEGRAM BOT PREFERENCES")
     
-    # Section 34 Free Data Feed Health Monitor
     st.markdown("###### 🌐 Free API Feed Health & Network Status (Section 34)")
     f_c1, f_c2, f_c3 = st.columns(3)
     with f_c1:
@@ -1466,6 +1464,27 @@ with tab16:
         st.markdown("### 🤖 Auto-Trader Engine Control")
         st.session_state.auto_trade_enabled = st.toggle("Enable Automated Execution", value=st.session_state.auto_trade_enabled)
 
+        st.markdown("---")
+        st.markdown("### 📡 Telegram Bot Commands Simulator (Section 39.19)")
+        cmd_c1, cmd_c2 = st.columns(2)
+        with cmd_c1:
+            if st.button("Trigger /status", use_container_width=True):
+                send_telegram("📡 *BOT STATUS COMMAND*\nActive Runner: " + ("YES" if st.session_state.active_trade else "NO") + "\nWallet Balance: $" + f"{wallet_bal:,.2f}")
+                st.success("Sent /status response to Telegram!")
+            if st.button("Trigger /morning Brief", use_container_width=True):
+                send_telegram("🌅 *MANUAL 08:00 AM BRIEF*\nRegime: " + str(current_regime) + "\nBTC Price: $" + f"{btc_price:,.2f}")
+                st.success("Sent Morning Brief to Telegram!")
+        with cmd_c2:
+            if st.button("Trigger /active Setup", use_container_width=True):
+                if st.session_state.active_trade:
+                    send_telegram("⚡ *ACTIVE TRADE INFO*\nID: `" + str(st.session_state.active_trade['trade_id']) + "`\nEntry: $" + str(st.session_state.active_trade['entry']))
+                else:
+                    send_telegram("⚡ *ACTIVE TRADE INFO*\nNo active runner currently in market.")
+                st.success("Sent /active info to Telegram!")
+            if st.button("Trigger /evening Audit", use_container_width=True):
+                send_telegram("🌆 *MANUAL 08:00 PM AUDIT*\nDay Realized PnL: $" + f"{realized_pnl:,.2f}")
+                st.success("Sent Evening Audit to Telegram!")
+
     with s2:
         st.markdown("### 🔔 Telegram Notification Credentials")
         curr_tok = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -1481,6 +1500,16 @@ with tab16:
 
         t_in = st.text_input("Telegram Bot Token", value=curr_tok, type="password")
         c_in = st.text_input("Telegram Chat ID", value=curr_cht)
+
+        pref_col1, pref_col2 = st.columns(2)
+        with pref_col1:
+            st.checkbox("Early Long/Short Alerts", value=True)
+            st.checkbox("Target Hits (T1/T2/T3)", value=True)
+            st.checkbox("Trailing Stop / Breakeven Updates", value=True)
+        with pref_col2:
+            st.checkbox("Confirmed Breakouts", value=True)
+            st.checkbox("Exhaustion & Reversal Watches", value=True)
+            st.checkbox("Morning / Evening Briefings", value=True)
 
         if st.button("Save Credentials & Test Alert", use_container_width=True):
             with open(CONFIG_FILE, "w") as f:
